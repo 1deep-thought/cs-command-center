@@ -1,0 +1,15 @@
+@import "tailwindcss";
+
+/* Tailwind v4 CSS-first config. Dark mode follows prefers-color-scheme
+   (Tailwind's default `dark:` variant). Palette = zinc neutrals; color is
+   reserved for semantic status in components. */
+
+@theme inline {
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
+}
+
+:root {
+  color-scheme: light dark;
+}
+
