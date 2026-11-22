@@ -1,17 +1,22 @@
 """FastAPI entrypoint (Vercel Python function; routed from /api/py/* by vercel.json).
 
 Local dev:  uv run uvicorn api.index:app --reload --port 8000
+
+Auth is default-deny: every route sits on `guarded` (Delphina staff only) unless it
+is listed in PUBLIC_PATHS. tests/test_default_deny.py fails if a route is neither.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from datetime import date, datetime, timedelta, timezone
 from typing import Annotated
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
+from api._lib.auth import require_delphina
 from api._lib.bigquery import data_source
 from api._lib.mock import mock_accounts
 from api._lib.models import DataSourceName, RenewalsResponse, RenewalWindow
@@ -19,7 +24,21 @@ from api._lib.renewals import build_renewals
 
 log = logging.getLogger(__name__)
 
-app = FastAPI(title="CS Command Center API", docs_url="/api/py/docs", openapi_url="/api/py/openapi.json")
+# Interactive docs and the OpenAPI schema describe every route, so they are only
+# served off Vercel (local dev). On Vercel they are off, not merely unlinked.
+_ON_VERCEL = bool(os.environ.get("VERCEL") or os.environ.get("VERCEL_ENV"))
+
+app = FastAPI(
+    title="CS Command Center API",
+    docs_url=None if _ON_VERCEL else "/api/py/docs",
+    openapi_url=None if _ON_VERCEL else "/api/py/openapi.json",
+)
+
+# Anything not listed here must require a signed-in Delphina user.
+PUBLIC_PATHS: frozenset[str] = frozenset({"/api/py/health"})
+
+public = APIRouter()
+guarded = APIRouter(dependencies=[Depends(require_delphina)])
 
 
 def default_as_of() -> date:
@@ -32,12 +51,12 @@ class Health(BaseModel):
     data_source: DataSourceName
 
 
-@app.get("/api/py/health", response_model=Health)
+@public.get("/api/py/health", response_model=Health)
 def health() -> Health:
     return Health(status="ok", data_source=data_source())
 
 
-@app.get("/api/py/renewals", response_model=RenewalsResponse)
+@guarded.get("/api/py/renewals", response_model=RenewalsResponse)
 def renewals(
     window: Annotated[RenewalWindow, Query()] = "next_90d",
     owner: Annotated[str | None, Query(max_length=64)] = None,
@@ -57,3 +76,7 @@ def renewals(
             log.exception("BigQuery renewals query failed")
             raise HTTPException(status_code=502, detail="Warehouse query failed") from exc
     return build_renewals(accounts, as_of=as_of, window=window, owner=owner, data_source=source)
+
+
+app.include_router(public)
+app.include_router(guarded)

@@ -107,9 +107,9 @@ def test_owner_filter(accounts):
     assert len(res.owners) == 3
 
 
-def test_endpoint_mock_mode(monkeypatch):
+def test_endpoint_mock_mode(monkeypatch, authed_app):
     monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS_JSON", raising=False)
-    client = TestClient(app)
+    client = TestClient(authed_app)
     assert client.get("/api/py/health").json() == {"status": "ok", "data_source": "mock"}
     body = client.get("/api/py/renewals", params={"window": "days_91_180"}).json()
     assert body["data_source"] == "mock"

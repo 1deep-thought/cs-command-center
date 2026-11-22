@@ -1,4 +1,7 @@
+import { NoAccessCard, SignInCard, SignOutButton } from "@/components/auth/sign-in";
 import { getRenewals } from "@/lib/api";
+import { AuthRequiredError, NotAuthorizedError } from "@/lib/auth";
+import type { RenewalsResponse } from "@/types/renewals";
 import { RenewalsEmpty } from "./empty-state";
 import { pluralize } from "./format";
 import { RenewalsHeader } from "./header";
@@ -18,10 +21,17 @@ export async function RenewalsDashboard({
   searchParams: RenewalsSearchParams;
 }) {
   const sp = await searchParams;
-  const data = await getRenewals({
-    window: parseWindow(firstParam(sp.window)),
-    owner: firstParam(sp.owner),
-  });
+  let data: RenewalsResponse;
+  try {
+    data = await getRenewals({
+      window: parseWindow(firstParam(sp.window)),
+      owner: firstParam(sp.owner),
+    });
+  } catch (error) {
+    if (error instanceof AuthRequiredError) return <SignInCard />;
+    if (error instanceof NotAuthorizedError) return <NoAccessCard />;
+    throw error;
+  }
   const { summary, accounts, owners } = data;
   const ownerName =
     owners.find((o) => o.owner_id === summary.owner_filter)?.owner_name ?? null;
@@ -39,10 +49,13 @@ export async function RenewalsDashboard({
       ) : (
         <RenewalsTable accounts={accounts} />
       )}
+      <div className="flex items-center justify-between gap-3">
       <p className="h-4 text-[11px] leading-4 text-zinc-500 tabular-nums dark:text-zinc-400">
         {pluralize(accounts.length, "account")} · sorted by past due, band, renewal date, ARR ·
         probability config {summary.probability_config_version}
       </p>
+      <SignOutButton />
+      </div>
     </>
   );
 }
