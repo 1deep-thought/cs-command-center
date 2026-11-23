@@ -65,7 +65,7 @@ def test_delete_cascades_to_links():
     for spec in (PAIN_POINT, CRITERION):
         sql, _ = build(spec, "delete", {}, base_version=1, cascade_tables={"criterion_pain_point": "p.d.link"})
         assert "UPDATE `p.d.link` SET deleted_at" in sql
-        assert sql.index("p.d.link") < sql.index("INSERT INTO `p.d.log`")
+        assert sql.index("UPDATE `p.d.link`") < sql.rindex("INSERT INTO `p.d.log`")  # item log row comes last
     with pytest.raises(ValueError):
         build(PAIN_POINT, "delete", {}, base_version=1)
 
@@ -135,9 +135,13 @@ class FakeLinks:
         self.pov = pov(status)
         self.links: set[tuple[str, str]] = set()
         self.live = {"c1": {"pp1", "pp2"}}  # criterion -> pain points that exist
+        self.ops: set[str] = set()
 
     def get_pov(self, pov_id):
         return self.pov if pov_id == "p1" else None
+
+    def op_applied(self, pov_id, op_id, item_kind, item_id):
+        return str(op_id) in self.ops
 
     def list_links(self, pov_id):
         return [{"criterion_id": c, "pain_point_id": p} for c, p in sorted(self.links)]
@@ -152,10 +156,14 @@ class FakeLinks:
             if key in self.links:
                 return 4
             self.links.add(key)
+            self.ops.add(op_id)
             return 1
+        if criterion_id not in self.live or pain_point_id not in self.live[criterion_id]:
+            return 6
         if key not in self.links:
             return 4
         self.links.discard(key)
+        self.ops.add(op_id)
         return 1
 
 
@@ -184,3 +192,75 @@ def test_link_to_missing_things_is_not_found_and_frozen_plan_is_frozen():
 def test_list_links_unknown_pov_is_none():
     assert list_links(FakeLinks(), "missing") is None
     assert list_links(FakeLinks(), "p1") == []
+
+
+def test_replayed_add_does_not_resurrect_a_removed_link():
+    repo = FakeLinks()
+    op = uuid4()
+    change_link(repo, "add", "p1", "c1", "pp1", op, "a@x")
+    change_link(repo, "remove", "p1", "c1", "pp1", uuid4(), "a@x")
+    assert change_link(repo, "add", "p1", "c1", "pp1", op, "a@x").kind == "applied"  # late retry
+    assert not repo.links
+
+
+def test_remove_with_a_bad_id_is_not_found():
+    assert change_link(FakeLinks(), "remove", "p1", "c1", "nope", uuid4(), "a@x").kind == "not_found"
+
+
+def link_sql(mode):
+    return build_link_script(
+        mode, pov_table="p.d.pov", link_table="p.d.link", criterion_table="p.d.c", pain_point_table="p.d.pp",
+        log_table="p.d.log", pov_id="p1", criterion_id="c1", pain_point_id="pp1", actor="a", op_id="o",
+    )[0]
+
+
+def test_link_sql_guards_against_replayed_ops_and_logs_old_and_new():
+    for mode in ("add", "remove"):
+        assert "op_id = @op_id" in link_sql(mode)
+    assert "'all'" in link_sql("add")
+    assert "@field, NULL, @pain_point_id" in link_sql("add")
+    assert "@field, @pain_point_id, NULL" in link_sql("remove")
+
+
+def test_cascade_logs_each_removed_link_before_removing_it():
+    sql, _ = build(CRITERION, "delete", {}, base_version=1, cascade_tables={"criterion_pain_point": "p.d.link"})
+    assert "'link_removed'" in sql
+    assert sql.index("'link_removed'") < sql.index("UPDATE `p.d.link`")
+
+
+def test_expected_seq_gates_the_write_and_reports_stale():
+    sql, params = build(MILESTONE, "create", {"kind": "kickoff", "due_date": "2026-12-01"}, expected_seq=7)
+    assert "seq = @expected_seq" in sql and "SET result = 2" in sql
+    assert any(p.name == "expected_seq" and p.value == 7 for p in params)
+    sql, params = build(MILESTONE, "create", {"kind": "kickoff", "due_date": "2026-12-01"})
+    assert "expected_seq" not in sql
+
+
+def test_duplicate_kind_wins_over_date_errors():
+    repo = FakeItems()
+    make("kickoff", "2026-12-01", repo)
+    assert make("kickoff", "2027-06-01", repo).kind == "duplicate"
+
+
+def test_milestone_write_is_stale_when_the_plan_changed_since_it_was_read():
+    repo = FakeItems()
+    make("kickoff", "2026-12-01", repo)
+    repo.pov = repo.pov.model_copy(update={"seq": repo.pov.seq})
+    orig = repo.get_pov
+
+    def moving(pov_id):  # the plan changes right after the service reads it
+        p = orig(pov_id)
+        repo.pov = p.model_copy(update={"seq": p.seq + 1})
+        return p
+
+    repo.get_pov = moving
+    assert make("checkpoint", "2026-12-15", repo).kind == "conflict"
+
+
+def test_unchanged_due_date_is_not_a_write():
+    repo = FakeItems()
+    item = make("kickoff", "2026-12-01", repo).item
+    writes = repo.writes
+    r = patch_item(repo, MILESTONE, "p1", item["milestone_id"],
+                   MilestonePatch(base_version=1, op_id=uuid4(), due_date="2026-12-01"), "a@x")
+    assert r.kind == "applied" and repo.writes == writes

@@ -48,8 +48,10 @@ class FakeItems:
     def get_item(self, spec, pov_id, item_id):
         return self.items.get((spec.kind, item_id))
 
-    def write_item(self, spec, mode, *, pov_id, item_id, actor, op_id, values, old, base_version):
+    def write_item(self, spec, mode, *, pov_id, item_id, actor, op_id, values, old, base_version, expected_seq=None):
         self.writes += 1
+        if expected_seq is not None and expected_seq != self.pov.seq:
+            return 2
         if self.pov.status not in ("draft", "collaborating"):
             return 0
         key = (spec.kind, item_id)

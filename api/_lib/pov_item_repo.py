@@ -59,6 +59,7 @@ class BigQueryItemRepo(BigQueryPovRepo):
         values: dict[str, object],
         old: dict[str, object],
         base_version: int | None,
+        expected_seq: int | None = None,
     ) -> int:
         sql, params = build_write_script(
             spec,
@@ -75,6 +76,7 @@ class BigQueryItemRepo(BigQueryPovRepo):
             new_json=_json(values),
             base_version=base_version,
             cascade_tables={t: pov_table(t) for t, _ in spec.cascade},
+            expected_seq=expected_seq,
         )
         rows = self._run(sql, [_to_query_param(p) for p in params], retry=True)
         if not rows:

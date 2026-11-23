@@ -42,18 +42,29 @@ def build_link_script(
         f"SELECT 1 FROM `{link_table}` WHERE pov_id = @pov_id AND criterion_id = @criterion_id "
         "AND pain_point_id = @pain_point_id AND deleted_at IS NULL"
     )
+    op_logged = (
+        f"SELECT 1 FROM `{log_table}` WHERE pov_id = @pov_id AND op_id = @op_id "
+        "AND item_kind = 'criterion_link' AND item_id = @criterion_id"
+    )
+    both_live = (
+        f"EXISTS (SELECT 1 FROM `{criterion_table}` WHERE criterion_id = @criterion_id AND pov_id = @pov_id AND deleted_at IS NULL) "
+        f"AND EXISTS (SELECT 1 FROM `{pain_point_table}` WHERE pain_point_id = @pain_point_id AND pov_id = @pov_id AND deleted_at IS NULL)"
+    )
     if mode == "add":
         child = f"""INSERT INTO `{link_table}` (pov_id, criterion_id, pain_point_id, created_at)
     SELECT @pov_id, @criterion_id, @pain_point_id, CURRENT_TIMESTAMP() FROM UNNEST([1])
     WHERE EXISTS (SELECT 1 FROM `{criterion_table}` WHERE criterion_id = @criterion_id AND pov_id = @pov_id AND deleted_at IS NULL)
       AND EXISTS (SELECT 1 FROM `{pain_point_table}` WHERE pain_point_id = @pain_point_id AND pov_id = @pov_id AND deleted_at IS NULL)
-      AND NOT EXISTS ({live_link});"""
-        failure = f"IF(EXISTS({live_link}), 4, 6)"
+      AND NOT EXISTS ({live_link})
+      AND NOT EXISTS ({op_logged});"""
+        failure = f"IF(EXISTS({op_logged}) OR EXISTS({live_link}), 4, 6)"
     else:
         child = f"""UPDATE `{link_table}` SET deleted_at = CURRENT_TIMESTAMP()
-    WHERE pov_id = @pov_id AND criterion_id = @criterion_id AND pain_point_id = @pain_point_id AND deleted_at IS NULL;"""
-        failure = "4"
+    WHERE pov_id = @pov_id AND criterion_id = @criterion_id AND pain_point_id = @pain_point_id AND deleted_at IS NULL
+      AND NOT EXISTS ({op_logged});"""
+        failure = f"IF(EXISTS({op_logged}) OR ({both_live}), 4, 6)"
 
+    old_value, new_value = ("NULL", "@pain_point_id") if mode == "add" else ("@pain_point_id", "NULL")
     sql = f"""
 DECLARE result INT64 DEFAULT 0;
 BEGIN TRANSACTION;
@@ -63,7 +74,7 @@ IF @@row_count = 1 THEN
   {child}
   IF @@row_count >= 1 THEN
     INSERT INTO `{log_table}` ({LOG_COLUMNS})
-      SELECT p.pov_id, p.seq, @op_id, @actor, 'delphina', 'criterion_link', @criterion_id, @field, NULL, @pain_point_id, 'all', CURRENT_TIMESTAMP()
+      SELECT p.pov_id, p.seq, @op_id, @actor, 'delphina', 'criterion_link', @criterion_id, @field, {old_value}, {new_value}, 'all', CURRENT_TIMESTAMP()
       FROM `{pov_table}` p WHERE p.pov_id = @pov_id;
     SET result = 1;
   ELSE

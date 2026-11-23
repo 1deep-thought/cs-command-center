@@ -112,6 +112,10 @@ def _milestone_dates(repo: ItemRepo, pov_id: str, item_id: str | None, kind: str
     return dates
 
 
+def _seq_kw(seq: int | None) -> dict[str, int]:
+    return {} if seq is None else {"expected_seq": seq}
+
+
 def create_item(repo: ItemRepo, spec: ItemSpec, pov_id: str, data, actor: str) -> ItemResult:
     pov = repo.get_pov(pov_id)
     if pov is None:
@@ -123,18 +127,24 @@ def create_item(repo: ItemRepo, spec: ItemSpec, pov_id: str, data, actor: str) -
     if not plan_is_editable(pov.status):
         return ItemResult("frozen")
 
+    seq = None
     if spec is MILESTONE:
+        if any(m["kind"] == data.kind for m in repo.list_items(MILESTONE, pov_id)):
+            return ItemResult("duplicate")
         error = invalid_milestone_dates(_milestone_dates(repo, pov_id, None, data.kind, data.due_date))
         if error:
             return ItemResult("invalid", code=error)
+        seq = pov.seq  # read before the list above; the write fails as stale if anything changed since
     values: dict[str, object] = {**spec.defaults}
     values.update(data.model_dump(exclude={"op_id"}, exclude_none=True))
     if spec is PAIN_POINT and values.get("value_low_minor") is not None:
         values["value_source"] = "prospect_stated"
     code = repo.write_item(
         spec, "create", pov_id=pov_id, item_id=item_id, actor=actor, op_id=item_id,
-        values=values, old={}, base_version=None,
+        values=values, old={}, base_version=None, **_seq_kw(seq),
     )
+    if spec is MILESTONE and code == STALE:
+        return ItemResult("conflict")  # plan changed under us: re-read and retry
     return _outcome(repo, spec, pov_id, item_id, code, item_id)
 
 
@@ -151,6 +161,11 @@ def patch_item(repo: ItemRepo, spec: ItemSpec, pov_id: str, item_id: str, patch,
         return ItemResult("conflict", current)
 
     changes = patch.changes()
+    seq = None
+    if spec is MILESTONE:
+        if "due_date" in changes and changes["due_date"] == current.get("due_date"):
+            del changes["due_date"]  # unchanged: not a write
+        seq = pov.seq
     if spec is PAIN_POINT:
         if (error := invalid_pain_point_change(current, changes)) is not None:
             return ItemResult("invalid", current, code=error)
@@ -172,7 +187,7 @@ def patch_item(repo: ItemRepo, spec: ItemSpec, pov_id: str, item_id: str, patch,
     old = {f: current.get(f) for f in changes}
     code = repo.write_item(
         spec, "update", pov_id=pov_id, item_id=item_id, actor=actor, op_id=str(patch.op_id),
-        values=changes, old=old, base_version=patch.base_version,
+        values=changes, old=old, base_version=patch.base_version, **_seq_kw(seq),
     )
     return _outcome(repo, spec, pov_id, item_id, code, str(patch.op_id))
 

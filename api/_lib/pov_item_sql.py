@@ -51,6 +51,7 @@ def build_write_script(
     new_json: str,
     base_version: int | None = None,
     cascade_tables: dict[str, str] | None = None,
+    expected_seq: int | None = None,
 ) -> tuple[str, list[Param]]:
     fields = sorted(values)
     unknown = set(fields) - set(spec.fields)
@@ -127,16 +128,33 @@ def build_write_script(
             qualified = (cascade_tables or {}).get(table_key)
             if qualified is None:
                 raise ValueError(f"cascade table {table_key} not provided")
+            # One log row per link that goes away, so history can be rebuilt from the log alone.
             cascade += (
+                f"    INSERT INTO `{log_table}` ({LOG_COLUMNS})\n"
+                f"      SELECT l.pov_id, p.seq, @op_id, @actor, 'delphina', 'criterion_link', l.criterion_id, 'link_removed', "
+                "l.pain_point_id, NULL, 'all', CURRENT_TIMESTAMP()\n"
+                f"      FROM `{qualified}` l JOIN `{pov_table}` p ON p.pov_id = l.pov_id\n"
+                f"      WHERE l.pov_id = @pov_id AND l.{column} = @item_id AND l.deleted_at IS NULL;\n"
                 f"    UPDATE `{qualified}` SET deleted_at = CURRENT_TIMESTAMP()\n"
                 f"      WHERE pov_id = @pov_id AND {column} = @item_id AND deleted_at IS NULL;\n"
             )
+
+    seq_gate = ""
+    stale_branch = ""
+    if expected_seq is not None:
+        # Sibling-row rules (milestone dates) were checked against this seq; any write since then makes it stale.
+        params.append(Param("expected_seq", "INT64", expected_seq))
+        seq_gate = " AND seq = @expected_seq"
+        stale_branch = (
+            f"ELSEIF EXISTS (SELECT 1 FROM `{pov_table}` WHERE pov_id = @pov_id "
+            "AND status IN ('draft', 'collaborating') AND deleted_at IS NULL) THEN\n  SET result = 2;\n"
+        )
 
     sql = f"""
 DECLARE result INT64 DEFAULT 0;
 BEGIN TRANSACTION;
 UPDATE `{pov_table}` SET seq = seq + 1, updated_by = @actor, updated_at = CURRENT_TIMESTAMP()
-  WHERE pov_id = @pov_id AND status IN ('draft', 'collaborating') AND deleted_at IS NULL;
+  WHERE pov_id = @pov_id AND status IN ('draft', 'collaborating') AND deleted_at IS NULL{seq_gate};
 IF @@row_count = 1 THEN
   {child}
   IF @@row_count = 1 THEN
@@ -147,7 +165,7 @@ IF @@row_count = 1 THEN
   ELSE
     SET result = {failure};
   END IF;
-END IF;
+{stale_branch}END IF;
 IF result = 1 THEN COMMIT TRANSACTION; ELSE ROLLBACK TRANSACTION; END IF;
 SELECT result AS result;
 """
