@@ -8,7 +8,7 @@ type Result = {
   steps: { step: string; status: number; ok: boolean; note?: string }[];
 };
 
-export function PovCheck() {
+export function PovCheck({ endpoint = "/api/debug/pov-check", label = "Run PoV API check" }: { endpoint?: string; label?: string }) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -18,7 +18,7 @@ export function PovCheck() {
     setError(null);
     setResult(null);
     try {
-      const res = await fetch("/api/debug/pov-check", { method: "POST" });
+      const res = await fetch(endpoint, { method: "POST" });
       if (res.status === 401) setError("Not signed in (or the session expired). Sign in on the home page, then try again.");
       else if (!res.ok) setError(`Check failed to run (HTTP ${res.status}).`);
       else setResult((await res.json()) as Result);
@@ -41,7 +41,7 @@ export function PovCheck() {
         onClick={run}
         className="h-7 rounded-md border border-zinc-200 px-2.5 text-xs font-medium text-zinc-800 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900"
       >
-        {busy ? "Running…" : "Run PoV API check"}
+        {busy ? "Running…" : label}
       </button>
       {error ? (
         <p role="alert" className="text-xs text-rose-600 dark:text-rose-400">
