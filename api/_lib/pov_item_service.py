@@ -11,12 +11,13 @@ from datetime import datetime, timezone
 from typing import Literal, Protocol
 from uuid import UUID, uuid4
 
-from .pov_item_specs import PAIN_POINT, ItemSpec
+from .pov_item_specs import MILESTONE, PAIN_POINT, ItemSpec
+from .pov_milestone_rules import invalid_milestone_dates
 from .pov_models import PovOwnerView
 from .pov_rules import invalid_pain_point_change, plan_is_editable
 
 # write_item result codes (see pov_item_sql)
-APPLIED, FROZEN, STALE, FULL, EXISTS = 1, 0, 2, 3, 4
+APPLIED, FROZEN, STALE, FULL, EXISTS, DUPLICATE = 1, 0, 2, 3, 4, 5
 VALUE_FIELDS = {"value_low_minor", "value_high_minor", "value_basis"}
 
 
@@ -46,7 +47,7 @@ class ItemRepo(Protocol):
 
 @dataclass(frozen=True)
 class ItemResult:
-    kind: Literal["applied", "not_found", "frozen", "conflict", "limit", "invalid"]
+    kind: Literal["applied", "not_found", "frozen", "conflict", "limit", "duplicate", "invalid"]
     item: dict[str, object] | None = None
     code: str | None = None
 
@@ -72,6 +73,8 @@ def _outcome(
         return ItemResult("frozen", latest)
     if code == FULL:
         return ItemResult("limit")
+    if code == DUPLICATE:
+        return ItemResult("duplicate")
     if latest is None:
         return ItemResult("not_found") if code == STALE else ItemResult("conflict")  # EXISTS but deleted
     return ItemResult("conflict", latest)
@@ -103,6 +106,12 @@ def _apply_value_rules(current: dict[str, object], changes: dict[str, object], a
     return None
 
 
+def _milestone_dates(repo: ItemRepo, pov_id: str, item_id: str | None, kind: str, due) -> dict[str, object]:
+    dates = {m["kind"]: m["due_date"] for m in repo.list_items(MILESTONE, pov_id) if m["milestone_id"] != item_id}
+    dates[kind] = due
+    return dates
+
+
 def create_item(repo: ItemRepo, spec: ItemSpec, pov_id: str, data, actor: str) -> ItemResult:
     pov = repo.get_pov(pov_id)
     if pov is None:
@@ -114,6 +123,10 @@ def create_item(repo: ItemRepo, spec: ItemSpec, pov_id: str, data, actor: str) -
     if not plan_is_editable(pov.status):
         return ItemResult("frozen")
 
+    if spec is MILESTONE:
+        error = invalid_milestone_dates(_milestone_dates(repo, pov_id, None, data.kind, data.due_date))
+        if error:
+            return ItemResult("invalid", code=error)
     values: dict[str, object] = {**spec.defaults}
     values.update(data.model_dump(exclude={"op_id"}, exclude_none=True))
     if spec is PAIN_POINT and values.get("value_low_minor") is not None:
@@ -143,6 +156,19 @@ def patch_item(repo: ItemRepo, spec: ItemSpec, pov_id: str, item_id: str, patch,
             return ItemResult("invalid", current, code=error)
         if (error := _apply_value_rules(current, changes, actor)) is not None:
             return ItemResult("invalid", current, code=error)
+    if spec is MILESTONE:
+        if "due_date" in changes:
+            error = invalid_milestone_dates(_milestone_dates(repo, pov_id, item_id, current["kind"], changes["due_date"]))
+            if error:
+                return ItemResult("invalid", current, code=error)
+        if "completed" in changes:
+            done = changes.pop("completed")
+            if done and current.get("completed_at") is None:
+                changes["completed_at"] = datetime.now(timezone.utc)
+            elif not done and current.get("completed_at") is not None:
+                changes["completed_at"] = None
+        if not changes:  # e.g. marking an already-completed milestone complete: nothing to write
+            return ItemResult("applied", current)
     old = {f: current.get(f) for f in changes}
     code = repo.write_item(
         spec, "update", pov_id=pov_id, item_id=item_id, actor=actor, op_id=str(patch.op_id),

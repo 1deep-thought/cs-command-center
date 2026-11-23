@@ -17,7 +17,8 @@ from api._lib.auth_core import Principal
 from api._lib.pov_bigquery import CREDENTIALS_ENV
 from api._lib.pov_item_service import ItemRepo, ItemResult, create_item, delete_item, list_items, patch_item
 from api._lib.pov_item_specs import SPECS, ItemSpec
-from api._lib.pov_items import ItemConflict
+from api._lib.pov_items import CriterionLinkIn, CriterionLinkView, ItemConflict
+from api._lib.pov_link_service import LinkRepo, change_link, list_links
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ CONFLICT_TEXT = {
     "version_conflict": "Someone else changed this first.",
     "plan_frozen": "The plan is locked.",
     "limit_reached": "This plan is at its limit for this kind of item.",
+    "duplicate_kind": "This plan already has one of these.",
 }
 
 
@@ -44,6 +46,7 @@ def get_item_repo() -> ItemRepo:
 
 
 Repo = Annotated[ItemRepo, Depends(get_item_repo)]
+LinkRepoDep = Annotated[LinkRepo, Depends(get_item_repo)]  # the BigQuery repo implements both
 
 
 def _respond(spec: ItemSpec, result: ItemResult, *, success: int = 200):
@@ -57,7 +60,12 @@ def _respond(spec: ItemSpec, result: ItemResult, *, success: int = 200):
         if result.item is None:
             return Response(status_code=204)
         return JSONResponse(status_code=success, content=view(result.item))
-    code = {"conflict": "version_conflict", "frozen": "plan_frozen", "limit": "limit_reached"}[result.kind]
+    code = {
+        "conflict": "version_conflict",
+        "frozen": "plan_frozen",
+        "limit": "limit_reached",
+        "duplicate": "duplicate_kind",
+    }[result.kind]
     body = ItemConflict(
         code=code,
         message=CONFLICT_TEXT[code],
@@ -101,3 +109,51 @@ def _register(spec: ItemSpec) -> None:
 
 for _spec in SPECS:
     _register(_spec)
+
+
+# ---- criterion <-> pain point links (a set: adding or removing twice is fine)
+
+LINKS = "/{pov_id}/criteria/{criterion_id}/pain-points"
+LinkConflict = {409: {"model": ItemConflict}}
+
+
+def _link_view(link: dict[str, object]) -> dict[str, object]:
+    return CriterionLinkView(**link).model_dump(mode="json")  # type: ignore[arg-type]
+
+
+@router.get("/{pov_id}/criterion-links", response_model=list[CriterionLinkView], name="list_criterion_links")
+def list_criterion_links(pov_id: PovId, repo: LinkRepoDep):
+    links = list_links(repo, pov_id)
+    if links is None:
+        raise HTTPException(status_code=404, detail="pov_not_found")
+    return links
+
+
+@router.post(LINKS, response_model=CriterionLinkView, status_code=201, responses=LinkConflict, name="add_criterion_link")
+def add_criterion_link(pov_id: PovId, criterion_id: ItemId, body: CriterionLinkIn, staff: Staff, repo: LinkRepoDep):
+    result = change_link(repo, "add", pov_id, criterion_id, body.pain_point_id, body.op_id, staff.email)
+    return _link_response(result, success=201)
+
+
+@router.delete(LINKS + "/{pain_point_id}", status_code=204, responses=LinkConflict, name="remove_criterion_link")
+def remove_criterion_link(
+    pov_id: PovId,
+    criterion_id: ItemId,
+    pain_point_id: ItemId,
+    staff: Staff,
+    repo: LinkRepoDep,
+    op_id: Annotated[UUID, Query()],
+):
+    result = change_link(repo, "remove", pov_id, criterion_id, pain_point_id, op_id, staff.email)
+    return _link_response(result)
+
+
+def _link_response(result: ItemResult, *, success: int = 200):
+    if result.kind == "not_found":
+        raise HTTPException(status_code=404, detail="not_found")
+    if result.kind == "applied":
+        if result.item is None:
+            return Response(status_code=204)
+        return JSONResponse(status_code=success, content=_link_view(result.item))
+    body = ItemConflict(code="plan_frozen", message=CONFLICT_TEXT["plan_frozen"], current=None)
+    return JSONResponse(status_code=409, content=body.model_dump(mode="json"))

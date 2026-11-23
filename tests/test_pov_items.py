@@ -139,7 +139,7 @@ def test_sql_gates_on_plan_status_and_logs_in_the_same_transaction():
 def test_sql_unordered_stakeholders_have_no_position_and_delete_is_soft():
     sql, _ = build(STAKEHOLDER, "create", {"name": "n"})
     assert "position" not in sql
-    sql, _ = build(PAIN_POINT, "delete", {}, base_version=1)
+    sql, _ = build(PAIN_POINT, "delete", {}, base_version=1, cascade_tables={"criterion_pain_point": "p.d.link"})
     assert "deleted_at = CURRENT_TIMESTAMP()" in sql and "DELETE FROM" not in sql
 
 

@@ -111,9 +111,43 @@ export interface CriterionPatch {
 
 /** 409 body for item writes. `current` is null when there is no stored item to show (limit_reached, or plan_frozen on a create). */
 export interface ItemConflict<T = unknown> {
-  code: "version_conflict" | "plan_frozen" | "limit_reached";
+  code: "version_conflict" | "plan_frozen" | "limit_reached" | "duplicate_kind";
   message: string;
   current: T | null;
 }
 
-export const ITEM_LIMITS = { pain_points: 5, stakeholders: 25, criteria: 6 } as const;
+export const ITEM_LIMITS = { pain_points: 5, stakeholders: 25, criteria: 6, milestones: 4 } as const;
+
+export type MilestoneKind = "kickoff" | "checkpoint" | "readout" | "decision";
+export const MILESTONE_KINDS: readonly MilestoneKind[] = ["kickoff", "checkpoint", "readout", "decision"];
+
+/** No actor columns: created_by / updated_by are always null. One milestone per kind. */
+export interface Milestone extends ItemBase {
+  milestone_id: string;
+  kind: MilestoneKind;
+  due_date: string | null; // YYYY-MM-DD
+  completed_at: string | null;
+}
+export interface MilestoneCreate {
+  op_id?: string;
+  kind: MilestoneKind;
+  due_date: string;
+}
+export interface MilestonePatch {
+  base_version: number;
+  op_id: string;
+  due_date?: string;
+  completed?: boolean; // true stamps completed_at, false clears it
+}
+/** 422 codes: dates out of order, or kickoff to decision outside 14-60 days. */
+export type MilestoneInvalid = "invalid_milestone_order" | "invalid_exercise_length";
+
+/** A criterion proves a pain point. Links are a set: add/remove twice is fine. */
+export interface CriterionLink {
+  criterion_id: string;
+  pain_point_id: string;
+}
+export interface CriterionLinkIn {
+  op_id: string;
+  pain_point_id: string;
+}

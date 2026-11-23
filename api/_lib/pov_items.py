@@ -3,7 +3,7 @@ Mirror every change in src/types/pov-items.ts."""
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -23,6 +23,7 @@ SolveBucket = Literal["lt_30d", "m1_3", "m3_6", "m6_12", "gt_12m"]
 ValueSource = Literal["prospect_stated", "verified"]
 Role = Literal["sponsor", "champion", "evaluator", "data_it_owner", "economic_buyer"]
 EvidenceSource = Literal["prospect_data", "telemetry", "test_result", "attestation"]
+MilestoneKind = Literal["kickoff", "checkpoint", "readout", "decision"]
 
 
 class Strict(BaseModel):
@@ -33,9 +34,9 @@ class _ItemView(BaseModel):
     pov_id: str
     position: float | None = None  # stakeholders are unordered
     version: int
-    created_by: str | None
+    created_by: str | None = None  # milestones have no actor columns
     created_at: datetime
-    updated_by: str | None
+    updated_by: str | None = None
     updated_at: datetime
 
 
@@ -217,9 +218,60 @@ class CriterionView(_ItemView):
     evidence_source: EvidenceSource | None
 
 
+# ------------------------------------------------------------------ milestones
+
+
+class MilestoneCreate(Strict):
+    op_id: UUID | None = None
+    kind: MilestoneKind
+    due_date: date
+
+
+class MilestonePatch(Strict):
+    base_version: int = Field(ge=1)
+    op_id: UUID
+    due_date: date | None = None
+    completed: bool | None = None  # true stamps completed_at now, false clears it
+
+    @model_validator(mode="after")
+    def _check(self) -> MilestonePatch:
+        sent = self.model_fields_set - {"base_version", "op_id"}
+        if not sent:
+            raise ValueError("no fields to change")
+        for f in sent:
+            if getattr(self, f) is None:
+                raise ValueError(f"{f} cannot be cleared")
+        return self
+
+    def changes(self) -> dict[str, object]:
+        return {f: getattr(self, f) for f in self.model_fields_set - {"base_version", "op_id"}}
+
+
+class MilestoneView(_ItemView):
+    milestone_id: str
+    kind: MilestoneKind
+    due_date: date | None
+    completed_at: datetime | None
+
+
+# ---------------------------------------------------------------- criterion links
+
+
+class CriterionLinkIn(Strict):
+    """Link a success criterion to the pain point whose value it proves. Idempotent."""
+
+    op_id: UUID
+    pain_point_id: Annotated[str, StringConstraints(min_length=1, max_length=64)]
+
+
+class CriterionLinkView(BaseModel):
+    criterion_id: str
+    pain_point_id: str
+
+
 class ItemConflict(BaseModel):
     """409 body for item writes. `current` is the item as stored now (absent when it never existed)."""
 
-    code: Literal["version_conflict", "plan_frozen", "limit_reached"]
+    code: Literal["version_conflict", "plan_frozen", "limit_reached", "duplicate_kind"]
     message: str
     current: dict[str, object] | None

@@ -12,6 +12,9 @@ from .pov_items import (
     CriterionCreate,
     CriterionPatch,
     CriterionView,
+    MilestoneCreate,
+    MilestonePatch,
+    MilestoneView,
     PainPointCreate,
     PainPointPatch,
     PainPointView,
@@ -35,6 +38,10 @@ class ItemSpec:
     patch: type[BaseModel]
     view: type[BaseModel]
     defaults: dict[str, object] = field(default_factory=dict)  # stored on create when not sent
+    actor_columns: bool = True  # table has created_by / updated_by
+    virtual: frozenset[str] = frozenset()  # request fields the service translates into columns
+    unique_field: str | None = None  # at most one live item per value of this column (per PoV)
+    cascade: tuple[tuple[str, str], ...] = ()  # (table, column): soft-delete these rows with the item
 
     @property
     def select_columns(self) -> str:
@@ -70,6 +77,7 @@ PAIN_POINT: Final = ItemSpec(
     create=PainPointCreate,
     patch=PainPointPatch,
     view=PainPointView,
+    cascade=(("criterion_pain_point", "pain_point_id"),),
 )
 
 STAKEHOLDER: Final = ItemSpec(
@@ -116,6 +124,26 @@ CRITERION: Final = ItemSpec(
     create=CriterionCreate,
     patch=CriterionPatch,
     view=CriterionView,
+    cascade=(("criterion_pain_point", "criterion_id"),),
 )
 
-SPECS: Final = (PAIN_POINT, STAKEHOLDER, CRITERION)
+MILESTONE: Final = ItemSpec(
+    kind="milestone",
+    segment="milestones",
+    table="milestone",
+    id_column="milestone_id",
+    fields={"kind": "STRING", "due_date": "DATE", "completed_at": "TIMESTAMP"},
+    view_columns=(
+        "milestone_id", "pov_id", "kind", "due_date", "completed_at", "version", "created_at", "updated_at",
+    ),
+    max_items=4,
+    ordered=False,
+    create=MilestoneCreate,
+    patch=MilestonePatch,
+    view=MilestoneView,
+    actor_columns=False,
+    virtual=frozenset({"completed"}),
+    unique_field="kind",
+)
+
+SPECS: Final = (PAIN_POINT, STAKEHOLDER, CRITERION, MILESTONE)

@@ -10,6 +10,7 @@ from google.cloud import bigquery
 from .pov_bigquery import pov_table
 from .pov_item_specs import ItemSpec
 from .pov_item_sql import Param, build_write_script
+from .pov_link_sql import build_link_script
 from .pov_repo import BigQueryPovRepo, _json, _param
 
 
@@ -73,8 +74,45 @@ class BigQueryItemRepo(BigQueryPovRepo):
             old_json=_json(old),
             new_json=_json(values),
             base_version=base_version,
+            cascade_tables={t: pov_table(t) for t, _ in spec.cascade},
         )
         rows = self._run(sql, [_to_query_param(p) for p in params], retry=True)
         if not rows:
             raise RuntimeError("item write returned no result")
+        return int(rows[0]["result"])
+
+    def list_links(self, pov_id: str) -> list[dict[str, str]]:
+        rows = self._run(
+            f"SELECT criterion_id, pain_point_id FROM `{pov_table('criterion_pain_point')}` "
+            "WHERE pov_id = @pov_id AND deleted_at IS NULL ORDER BY criterion_id, pain_point_id LIMIT 200",
+            [_param("pov_id", "STRING", pov_id)],
+        )
+        return [dict(r.items()) for r in rows]
+
+    def write_link(
+        self,
+        mode: Literal["add", "remove"],
+        *,
+        pov_id: str,
+        criterion_id: str,
+        pain_point_id: str,
+        actor: str,
+        op_id: str,
+    ) -> int:
+        sql, params = build_link_script(
+            mode,
+            pov_table=pov_table("pov"),
+            link_table=pov_table("criterion_pain_point"),
+            criterion_table=pov_table("success_criterion"),
+            pain_point_table=pov_table("pain_point"),
+            log_table=pov_table("pov_change_log"),
+            pov_id=pov_id,
+            criterion_id=criterion_id,
+            pain_point_id=pain_point_id,
+            actor=actor,
+            op_id=op_id,
+        )
+        rows = self._run(sql, [_to_query_param(p) for p in params], retry=True)
+        if not rows:
+            raise RuntimeError("link write returned no result")
         return int(rows[0]["result"])
