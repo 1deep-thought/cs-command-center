@@ -82,3 +82,69 @@ export interface PovConflict {
   changed_by: string | null;
   changed_at: string;
 }
+
+// ---- readiness and transitions (GET /{id}/readiness, POST /{id}/transitions)
+
+export type TransitionTarget = "collaborating" | "locked";
+export type ReadinessKey = "pain_points" | "stakeholders" | "criteria" | "links" | "dates" | "sponsor_agreed";
+
+/** Codes the server sends today; render unknown codes generically so a new one never breaks the page. */
+export type ReadinessProblemCode =
+  | "no_pain_points" | "missing_value_range" | "missing_solve_bucket"
+  | "no_sponsor" | "multiple_sponsors" | "no_champion_or_evaluator"
+  | "too_few_criteria" | "weight_below_minimum" | "not_measurable" | "missing_scorer" | "scorer_not_on_plan"
+  | "missing_evidence_source" | "weights_not_100"
+  | "no_links" | "criterion_not_linked" | "pain_point_not_linked"
+  | "missing_kickoff" | "missing_checkpoint" | "missing_decision"
+  | "invalid_milestone_order" | "invalid_exercise_length"
+  | "sponsor_not_agreed" | "plan_changed_since_agreement";
+
+/** Why a check fails. item_kind/item_id name the row to fix; both null when the problem is the set. */
+export interface ReadinessProblem {
+  code: ReadinessProblemCode | (string & {});
+  item_kind: "pain_point" | "stakeholder" | "criterion" | "milestone" | null;
+  item_id: string | null;
+}
+
+export interface ReadinessCheck {
+  key: ReadinessKey;
+  ok: boolean;
+  problems: ReadinessProblem[];
+}
+
+/** The six lock checks for the plan as it stands at `seq`, and what the caller may do next. */
+export interface Readiness {
+  pov_id: string;
+  status: PovStatus;
+  seq: number;
+  ready: boolean;
+  passed: number;
+  total: number;
+  checks: ReadinessCheck[];
+  /** Empty unless the caller owns the plan. "locked" appears only when every check passes. */
+  allowed_transitions: TransitionTarget[];
+}
+
+/** Asking for the status the plan already has succeeds, so a retry is safe. */
+export interface TransitionIn {
+  to: TransitionTarget;
+  /** UUID. */
+  op_id: string;
+  /** Only with to: "locked". Omitted: keep what the plan has, else 80 and 60. Go must be above No-go. */
+  go_threshold?: number | null;
+  no_go_threshold?: number | null;
+}
+
+/** 409 from POST transitions. On "version_conflict" re-read readiness and try again. */
+export interface TransitionConflict {
+  code: "invalid_transition" | "version_conflict";
+  message: string;
+  current: PovOwnerView;
+}
+
+/** 422 from POST transitions when a lock check fails. Other 422s: `detail` is "invalid_thresholds",
+ * or FastAPI's standard list for a malformed body. 403: `detail` is "not_owner". */
+export interface NotReady {
+  detail: "not_ready";
+  readiness: Readiness;
+}

@@ -10,6 +10,9 @@ export default function Page() {
       <div className="mt-6">
         <PovCheck endpoint="/api/debug/pov-check-links" label="Run milestones + links check" />
       </div>
+      <div className="mt-6">
+        <PovCheck endpoint="/api/debug/pov-check-lock" label="Run readiness + lock check" />
+      </div>
     </main>
   );
 }

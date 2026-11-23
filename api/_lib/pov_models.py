@@ -138,3 +138,67 @@ class PovConflict(BaseModel):
     current: PovOwnerView
     changed_by: str | None
     changed_at: datetime
+
+
+# ------------------------------------------------------------------ readiness and transitions
+
+TransitionTarget = Literal["collaborating", "locked"]
+ReadinessKey = Literal["pain_points", "stakeholders", "criteria", "links", "dates", "sponsor_agreed"]
+
+
+class ReadinessProblem(BaseModel):
+    """Why a check fails. `item_kind`/`item_id` name the row to fix; both null when the problem is the set."""
+
+    code: str
+    item_kind: Literal["pain_point", "stakeholder", "criterion", "milestone"] | None = None
+    item_id: str | None = None
+
+
+class ReadinessCheck(BaseModel):
+    key: ReadinessKey
+    ok: bool
+    problems: list[ReadinessProblem]
+
+
+class Readiness(BaseModel):
+    """The six lock checks for a plan as it stands at `seq`, and what the caller may do next."""
+
+    pov_id: str
+    status: PovStatus
+    seq: int
+    ready: bool
+    passed: int
+    total: int
+    checks: list[ReadinessCheck]
+    allowed_transitions: list[TransitionTarget]
+
+
+class TransitionIn(Strict):
+    """Move the plan forward. Asking for the status it already has is a success, so retries are safe."""
+
+    to: TransitionTarget
+    op_id: UUID
+    # Only when locking. Omitted: keep what the plan has, else the defaults (80 and 60).
+    go_threshold: Threshold | None = None
+    no_go_threshold: Threshold | None = None
+
+    @model_validator(mode="after")
+    def _check(self) -> TransitionIn:
+        if self.to != "locked" and (self.go_threshold is not None or self.no_go_threshold is not None):
+            raise ValueError("thresholds are set when locking")
+        return self
+
+
+class TransitionConflict(BaseModel):
+    """409 body: the plan is not in a status this move starts from, or it changed while locking (retry)."""
+
+    code: Literal["invalid_transition", "version_conflict"]
+    message: str
+    current: PovOwnerView
+
+
+class NotReady(BaseModel):
+    """422 body when a lock is refused because a check fails."""
+
+    detail: Literal["not_ready"]
+    readiness: Readiness
