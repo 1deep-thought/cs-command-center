@@ -66,3 +66,29 @@ export function plural(n: number, one: string, many = `${one}s`): string {
 export function localPart(email: string): string {
   return email.split("@")[0] || email;
 }
+
+/** What a person types for money: "250k", "1.2m", "$1,200,000" → minor units, or null if unreadable. */
+export function parseMoney(text: string): number | null {
+  const match = /^\$?\s*([0-9][0-9,]*\.?[0-9]*|\.[0-9]+)\s*([kmb])?$/i.exec(text.trim());
+  if (!match) return null;
+  const scale = { k: 1e3, m: 1e6, b: 1e9 }[(match[2] ?? "").toLowerCase()] ?? 1;
+  const minor = Math.round(Number(match[1].replace(/,/g, "")) * scale * 100);
+  return Number.isFinite(minor) && minor >= 0 && minor <= 1e12 ? minor : null;
+}
+
+/** Minor units as a person would type them, without losing anything: 25_000_000 → "250k",
+ * 120_000_000 → "1.2m", 123_456_700 → "1234567". parseMoney reads every result back exactly. */
+export function moneyInput(minor: number | null | undefined): string {
+  if (typeof minor !== "number") return "";
+  const units = minor / 100;
+  if (units >= 1e6 && Number.isInteger(units / 1e3)) return `${units / 1e6}m`;
+  if (units >= 1e3 && Number.isInteger(units)) return `${units / 1e3}k`;
+  return String(units);
+}
+
+/** "2027-01-04" plus 15 days → "2027-01-19". Null if the date is unreadable. */
+export function addDays(iso: string | null | undefined, days: number): string | null {
+  const p = parts(iso);
+  if (!p) return null;
+  return new Date(Date.UTC(p.y, p.m - 1, p.d + days)).toISOString().slice(0, 10);
+}

@@ -1,8 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useId, useRef, useState, useTransition } from "react";
+import { useId, useRef, useState, type ReactNode } from "react";
 import { HEADER_ROW } from "@/components/renewals/layout";
 import type { PovOwnerView, Readiness, ReadinessProblem } from "@/types/pov";
 import { CHECK_LABEL, PROBLEM_FALLBACK, PROBLEM_TEXT, STATUS_LABEL } from "./labels";
@@ -34,16 +33,30 @@ export function PlanHeader({
   pov,
   readiness: initial,
   names,
+  stale,
+  saving,
+  onChanged,
+  children,
 }: {
   pov: PovOwnerView;
   readiness: Readiness;
   /** Row id → the title to show in a problem sentence. */
   names: Record<string, string>;
+  /** Edits are still saving (or being re-read), so readiness is out of date and the plan must not move. */
+  stale: boolean;
+  /** How many changes are waiting to be saved. */
+  saving: number;
+  /** Called after the plan's status or agreement changed, to re-read it. */
+  onChanged: () => void | Promise<void>;
+  children?: ReactNode;
 }) {
-  const router = useRouter();
   const panelId = useId();
   const meterRef = useRef<HTMLButtonElement>(null);
-  const [readiness, setReadiness] = useState(initial);
+  // A readiness answer from one of this header's own requests wins until the page has re-read
+  // the plan (its change counter moves on); after that the page's copy is the newer one.
+  const [answer, setAnswer] = useState<{ seq: number; readiness: Readiness } | null>(null);
+  const readiness = answer && answer.seq === pov.seq ? answer.readiness : initial;
+  const setReadiness = (next: Readiness) => setAnswer({ seq: pov.seq, readiness: next });
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<Action | null>(null);
   const [slow, setSlow] = useState(false);
@@ -51,7 +64,7 @@ export function PlanHeader({
   const [confirmLock, setConfirmLock] = useState(false);
   const [go, setGo] = useState(String(pov.go_threshold ?? 80));
   const [noGo, setNoGo] = useState(String(pov.no_go_threshold ?? 60));
-  const [refreshing, startRefresh] = useTransition();
+  const [settling, setSettling] = useState(false);
 
   const frozen = pov.status === "locked" || pov.status === "decided";
   const failing = readiness.checks.filter((c) => !c.ok);
@@ -65,12 +78,13 @@ export function PlanHeader({
           ? "agree"
           : "lock"
         : null;
-  const pending = busy !== null || refreshing;
+  const pending = busy !== null || settling || stale;
 
   function refresh() {
-    // The server re-reads the plan; this header is keyed on the plan's change counter, so it
-    // remounts with the new status and readiness.
-    startRefresh(() => router.refresh());
+    // The page re-reads the plan and hands this header the new status and readiness.
+    // Until then the button stays pending.
+    setSettling(true);
+    void Promise.resolve(onChanged()).finally(() => setSettling(false));
   }
 
   async function recheck() {
@@ -181,6 +195,10 @@ export function PlanHeader({
             <span role="status" className={`text-xs ${MUTED}`}>
               Still saving. This can take about 10 seconds.
             </span>
+          ) : saving > 0 ? (
+            <span role="status" className={`text-xs tabular-nums ${MUTED}`}>
+              Saving {saving} {saving === 1 ? "change" : "changes"}…
+            </span>
           ) : null}
           {frozen ? null : (
             <button
@@ -189,7 +207,8 @@ export function PlanHeader({
               aria-expanded={open}
               aria-controls={panelId}
               onClick={() => setOpen((v) => !v)}
-              className={`${BUTTON} inline-flex items-center gap-2`}
+              className={`${BUTTON} inline-flex items-center gap-2 ${stale ? "opacity-60" : ""}`}
+              title={stale ? "Updating after your changes" : undefined}
             >
               <span aria-hidden="true" className="flex gap-0.5">
                 {readiness.checks.map((c) => (
@@ -256,7 +275,8 @@ export function PlanHeader({
           ) : null}
         </p>
       ) : null}
-      {action === "agree" && !notice ? (
+      {children}
+      {action === "agree" && !notice && !stale ? (
         <p className={`mt-1.5 text-right text-xs ${MUTED}`}>
           Record this once the Sponsor has agreed to the plan as it stands. Any edit afterwards needs it recorded again.
         </p>
