@@ -30,7 +30,8 @@ export async function POST(request: Request) {
   }
   const claims = claimsOf(token);
   const clientId = process.env.NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID;
-  if (!claims || typeof claims.exp !== "number" || (clientId && claims.aud !== clientId)) {
+  if (!clientId) return NextResponse.json({ error: "not_configured" }, { status: 503 });
+  if (!claims || typeof claims.exp !== "number" || claims.aud !== clientId) {
     return NextResponse.json({ error: "bad_credential" }, { status: 400 });
   }
   const maxAge = Math.min(3600, Math.floor(claims.exp - Date.now() / 1000));

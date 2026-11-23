@@ -22,10 +22,10 @@ export async function getRenewals(params: {
     cache: "no-store",
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (res.status === 401) throw new AuthRequiredError();
+  if (res.status === 401) throw new AuthRequiredError(true); // we sent a token, so it expired or is invalid
   if (res.status === 403) throw new NotAuthorizedError();
   if (!res.ok) {
-    throw new Error(`Renewals API ${res.status}: ${await res.text()}`);
+    throw new Error(`Renewals API ${res.status}`);
   }
   return res.json() as Promise<RenewalsResponse>;
 }

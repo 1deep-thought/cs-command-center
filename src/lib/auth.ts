@@ -7,8 +7,11 @@ export const ID_TOKEN_COOKIE = "cs_id_token";
 
 /** No usable sign-in: no cookie, or the API rejected the token (e.g. expired). */
 export class AuthRequiredError extends Error {
-  constructor() {
+  /** True when a token was sent and rejected (expired), false when there was none. */
+  readonly expired: boolean;
+  constructor(expired = false) {
     super("Sign-in required");
+    this.expired = expired;
     this.name = "AuthRequiredError";
   }
 }

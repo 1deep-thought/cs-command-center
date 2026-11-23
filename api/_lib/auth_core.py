@@ -13,6 +13,7 @@ Model (docs: "Proof of Value Workspace: Design"):
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable, Mapping
 from typing import Final, Generic, Literal, TypeVar
@@ -21,6 +22,8 @@ from pydantic import BaseModel, ConfigDict
 
 GOOGLE_ISSUERS: Final = frozenset({"accounts.google.com", "https://accounts.google.com"})
 VENDOR_CACHE_TTL_S: Final = 60.0  # a removed user stays in for at most this long
+
+log = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -129,7 +132,8 @@ def authenticate(
     token = bearer_token(authorization)
     try:
         claims = verify_token(token, client_id)
-    except Exception:  # bad signature, expired, wrong audience: all the same to the caller
+    except Exception as exc:  # bad signature, expired, wrong audience: all the same to the caller
+        log.info("token rejected: %s", type(exc).__name__)
         raise AuthError(401, "invalid_token") from None
     email = email_from_claims(claims, client_id=client_id)
 
@@ -138,6 +142,7 @@ def authenticate(
         try:
             row = lookup_vendor_user(email)
         except Exception:
+            log.exception("vendor_user lookup failed")  # cause stays in logs, never in the response
             raise AuthError(503, "auth_lookup_failed") from None
         if row is not None and row.is_delphina is True and cache:
             cache.put(email, row)  # only positive results are cached

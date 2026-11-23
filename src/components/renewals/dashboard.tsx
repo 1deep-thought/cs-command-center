@@ -28,7 +28,7 @@ export async function RenewalsDashboard({
       owner: firstParam(sp.owner),
     });
   } catch (error) {
-    if (error instanceof AuthRequiredError) return <SignInCard />;
+    if (error instanceof AuthRequiredError) return <SignInCard expired={error.expired} />;
     if (error instanceof NotAuthorizedError) return <NoAccessCard />;
     throw error;
   }
@@ -49,12 +49,12 @@ export async function RenewalsDashboard({
       ) : (
         <RenewalsTable accounts={accounts} />
       )}
-      <div className="flex items-center justify-between gap-3">
-      <p className="h-4 text-[11px] leading-4 text-zinc-500 tabular-nums dark:text-zinc-400">
+      <div className="flex h-4 items-center justify-between gap-3">
+        <p className="min-w-0 truncate text-[11px] leading-4 text-zinc-500 tabular-nums dark:text-zinc-400">
         {pluralize(accounts.length, "account")} · sorted by past due, band, renewal date, ARR ·
         probability config {summary.probability_config_version}
       </p>
-      <SignOutButton />
+        <SignOutButton variant="link" />
       </div>
     </>
   );

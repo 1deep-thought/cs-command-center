@@ -18,12 +18,16 @@ declare global {
 const CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID;
 const CARD =
   "max-w-sm rounded-md border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950";
-const BTN =
-  "h-7 rounded-md border border-zinc-200 px-2.5 text-xs font-medium text-zinc-800 hover:bg-zinc-50 focus-visible:outline-2 focus-visible:outline-zinc-400 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900";
+const BUTTON =
+  "h-7 rounded-md border border-zinc-200 px-2.5 text-xs font-medium text-zinc-800 hover:bg-zinc-50 focus-visible:outline-2 focus-visible:outline-zinc-400 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900";
+const LINK =
+  "text-[11px] leading-4 text-zinc-500 underline decoration-zinc-300 underline-offset-2 hover:text-zinc-800 focus-visible:outline-2 focus-visible:outline-zinc-400 disabled:opacity-50 dark:text-zinc-400 dark:decoration-zinc-600 dark:hover:text-zinc-200";
+const ERROR = "mt-2 text-xs text-rose-600 dark:text-rose-400";
 
-export function SignInCard() {
+export function SignInCard({ expired = false }: { expired?: boolean }) {
   const router = useRouter();
   const buttonRef = useRef<HTMLDivElement>(null);
+  const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   function init() {
@@ -33,36 +37,54 @@ export function SignInCard() {
       client_id: CLIENT_ID,
       callback: async ({ credential }) => {
         setError(null);
-        const res = await fetch("/api/auth/session", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ credential }),
-        });
-        if (res.ok) router.refresh();
-        else setError("Sign-in failed. Try again.");
+        try {
+          const res = await fetch("/api/auth/session", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ credential }),
+          });
+          if (res.ok) router.refresh();
+          else if (res.status === 400) setError("That sign-in expired. Try again.");
+          else setError("Sign-in failed. Try again.");
+        } catch {
+          setError("Couldn't reach the server. Check your connection and try again.");
+        }
       },
     });
     id.renderButton(buttonRef.current, { theme: "outline", size: "medium", text: "signin_with" });
+    setReady(true);
   }
 
   return (
     <div className={CARD}>
-      <p className="text-[13px] font-medium text-zinc-900 dark:text-zinc-100">Sign in</p>
+      <p className="text-[13px] font-medium text-zinc-900 dark:text-zinc-100">
+        {expired ? "Session expired" : "Sign in"}
+      </p>
       <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-        Use your Delphina Google account to view customer health and renewals.
+        {expired
+          ? "Sign in again to keep viewing customer health and renewals."
+          : "Use your Delphina Google account to view customer health and renewals."}
       </p>
       {CLIENT_ID ? (
         <>
           <Script src="https://accounts.google.com/gsi/client" strategy="afterInteractive" onReady={init} />
-          <div ref={buttonRef} className="mt-3 h-8" />
+          <div className="relative mt-3 h-8 w-[200px]">
+            {ready ? null : (
+              <div
+                aria-hidden
+                className="absolute inset-0 animate-pulse rounded-md bg-zinc-100 dark:bg-zinc-900"
+              />
+            )}
+            <div ref={buttonRef} />
+          </div>
         </>
       ) : (
-        <p role="alert" className="mt-3 text-xs text-zinc-700 dark:text-zinc-300">
-          NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID is not set.
+        <p role="alert" className={ERROR}>
+          Sign-in isn&apos;t set up for this deployment. Contact an admin.
         </p>
       )}
       {error ? (
-        <p role="alert" className="mt-2 text-xs text-zinc-700 dark:text-zinc-300">
+        <p role="alert" className={ERROR}>
           {error}
         </p>
       ) : null}
@@ -70,16 +92,23 @@ export function SignInCard() {
   );
 }
 
-export function SignOutButton() {
+export function SignOutButton({ variant = "button" }: { variant?: "button" | "link" }) {
   const router = useRouter();
+  const [busy, setBusy] = useState(false);
   return (
     <button
       type="button"
-      className={BTN}
+      disabled={busy}
+      className={variant === "link" ? LINK : BUTTON}
       onClick={async () => {
-        window.google?.accounts.id.disableAutoSelect();
-        await fetch("/api/auth/session", { method: "DELETE" });
-        router.refresh();
+        setBusy(true);
+        try {
+          window.google?.accounts.id.disableAutoSelect();
+          const res = await fetch("/api/auth/session", { method: "DELETE" });
+          if (res.ok) router.refresh();
+        } finally {
+          setBusy(false);
+        }
       }}
     >
       Sign out
