@@ -170,6 +170,7 @@ class Readiness(BaseModel):
     passed: int
     total: int
     checks: list[ReadinessCheck]
+    is_owner: bool  # only the owner sees the buttons that move the plan
     allowed_transitions: list[TransitionTarget]
 
 

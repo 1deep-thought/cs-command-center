@@ -151,3 +151,15 @@ export interface CriterionLinkIn {
   op_id: string;
   pain_point_id: string;
 }
+
+
+/** GET /api/py/pov/{id}/plan: everything the plan page shows. */
+export interface PlanView {
+  pov: import("./pov").PovOwnerView;
+  pain_points: PainPoint[];
+  stakeholders: Stakeholder[];
+  criteria: Criterion[];
+  milestones: Milestone[];
+  links: CriterionLink[];
+  readiness: import("./pov").Readiness;
+}

@@ -90,3 +90,7 @@ def test_sponsor_agreement_errors():
     assert client_for(FakeLock(status="draft", agreed=False)).post(url, json=body).status_code == 409
     assert client_for(FakeLock(agreed=False)).post(url, json={}).status_code == 422
     assert client_for(FakeLock()).post("/api/py/pov/nope/sponsor-agreement", json=body).status_code == 404
+
+
+def test_plan_endpoint_is_404_for_an_unknown_pov():
+    assert client_for(FakeLock()).get("/api/py/pov/nope/plan").status_code == 404

@@ -121,6 +121,8 @@ export interface Readiness {
   passed: number;
   total: number;
   checks: ReadinessCheck[];
+  /** Only the owner gets the buttons that move the plan. */
+  is_owner: boolean;
   /** Empty unless the caller owns the plan. "locked" appears only when every check passes. */
   allowed_transitions: TransitionTarget[];
 }

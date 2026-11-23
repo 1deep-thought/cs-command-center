@@ -9,6 +9,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StringConstraints, model_validator
 
+from .pov_models import PovOwnerView, Readiness
+
 Text120 = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
 Text300 = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)]
 Text500 = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
@@ -275,3 +277,18 @@ class ItemConflict(BaseModel):
     code: Literal["version_conflict", "plan_frozen", "limit_reached", "duplicate_kind"]
     message: str
     current: dict[str, object] | None
+
+
+# ---------------------------------------------------------------- whole plan
+
+
+class PlanView(BaseModel):
+    """Everything the plan page shows, read in two queries (GET /{pov_id}/plan)."""
+
+    pov: PovOwnerView
+    pain_points: list[PainPointView]
+    stakeholders: list[StakeholderView]
+    criteria: list[CriterionView]
+    milestones: list[MilestoneView]
+    links: list[CriterionLinkView]
+    readiness: Readiness

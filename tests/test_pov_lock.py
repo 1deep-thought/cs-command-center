@@ -8,7 +8,8 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from api._lib.pov_lock_service import get_readiness, record_sponsor_agreement, transition
+from api._lib.pov_items import PlanView
+from api._lib.pov_lock_service import get_plan, get_readiness, record_sponsor_agreement, transition
 from api._lib.pov_lock_sql import build_agreement_script, build_transition_script
 from api._lib.pov_models import TransitionIn
 from api._lib.pov_rules import READINESS_KEYS, allowed_transitions, readiness
@@ -195,7 +196,9 @@ def test_readiness_reports_progress_and_what_the_caller_may_do():
     assert [c.key for c in state.checks if not c.ok] == ["sponsor_agreed"]
     repo = FakeLock()
     assert get_readiness(repo, "p1", OWNER).allowed_transitions == ["locked"]
-    assert get_readiness(repo, "p1", "someone@x").allowed_transitions == []
+    assert get_readiness(repo, "p1", OWNER).is_owner
+    other = get_readiness(repo, "p1", "someone@x")
+    assert (other.is_owner, other.allowed_transitions) == (False, [])
     assert get_readiness(repo, "nope", OWNER) is None
 
 
@@ -345,3 +348,36 @@ def test_agreement_sql_is_gated_on_status_and_seq_and_logs_at_the_new_seq():
     assert "'pov', pov_id, @field, NULL, @new_json" in sql and "version" not in sql
     assert sql.index("UPDATE `p.d.pov`") < sql.index("INSERT INTO `p.d.log`") < sql.index("COMMIT")
     assert next(p for p in params if p.name == "field").value == "sponsor_agreed"
+
+
+# ------------------------------------------------------------------ whole plan
+
+
+def test_get_plan_returns_every_part_and_readiness():
+    plan = get_plan(FakeLock(agreed=False), "p1", OWNER)
+    assert set(plan) == {"pov", "pain_points", "stakeholders", "criteria", "links", "milestones", "readiness"}
+    assert plan["readiness"].passed == 5 and len(plan["criteria"]) == 2
+    assert get_plan(FakeLock(), "nope", OWNER) is None
+
+
+def test_plan_view_accepts_rows_shaped_like_the_tables():
+    from api._lib.pov_item_specs import CRITERION, MILESTONE, PAIN_POINT, STAKEHOLDER
+    from tests.test_pov_items import NOW
+
+    def row(spec, **values):  # every view column present, unset ones NULL, as BigQuery returns them
+        base = dict.fromkeys(spec.view_columns)
+        base.update(pov_id="p1", version=1, created_at=NOW, updated_at=NOW, **values)
+        return base
+
+    repo = FakeLock()
+    view = PlanView(
+        pov=repo.pov,
+        pain_points=[row(PAIN_POINT, pain_point_id="pp1", title="t")],
+        stakeholders=[row(STAKEHOLDER, stakeholder_id="s1", name="n", roles=["sponsor"], is_active=True)],
+        criteria=[row(CRITERION, criterion_id="c1", statement="s", is_yes_no=True, weight_pct=100, target_value=Decimal("2.5"))],
+        milestones=[row(MILESTONE, milestone_id="m1", kind="kickoff", due_date=D("2027-01-04"))],
+        links=[{"criterion_id": "c1", "pain_point_id": "pp1"}],
+        readiness=get_readiness(repo, "p1", OWNER),
+    )
+    dumped = view.model_dump(mode="json")
+    assert dumped["criteria"][0]["target_value"] == 2.5 and dumped["milestones"][0]["due_date"] == "2027-01-04"

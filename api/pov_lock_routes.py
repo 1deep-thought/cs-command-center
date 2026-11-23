@@ -11,7 +11,15 @@ from fastapi.responses import JSONResponse
 from api._lib.auth import require_delphina
 from api._lib.auth_core import Principal
 from api._lib.pov_bigquery import CREDENTIALS_ENV
-from api._lib.pov_lock_service import LockRepo, TransitionResult, get_readiness, record_sponsor_agreement, transition
+from api._lib.pov_items import PlanView
+from api._lib.pov_lock_service import (
+    LockRepo,
+    TransitionResult,
+    get_plan,
+    get_readiness,
+    record_sponsor_agreement,
+    transition,
+)
 from api._lib.pov_models import (
     NotReady,
     PovOwnerView,
@@ -50,6 +58,14 @@ def read_readiness(pov_id: PovId, staff: Staff, repo: Repo) -> Readiness:
     if state is None:
         raise HTTPException(status_code=404, detail="pov_not_found")
     return state
+
+
+@router.get("/{pov_id}/plan", response_model=PlanView)
+def read_plan(pov_id: PovId, staff: Staff, repo: Repo):
+    plan = get_plan(repo, pov_id, staff.email)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="pov_not_found")
+    return plan
 
 
 def _refusal(result: TransitionResult):

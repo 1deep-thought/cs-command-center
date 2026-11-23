@@ -70,6 +70,7 @@ def _readiness(pov: PovOwnerView, parts: dict[str, object], actor: str) -> Readi
     checks = readiness(seq=pov.seq, sponsor_agreed_seq=agreed if isinstance(agreed, int) else None, **_rows(parts))
     passed = sum(1 for c in checks if c["ok"])
     ready = passed == len(checks)
+    owner = is_owner(pov, actor)
     return Readiness(
         pov_id=pov.pov_id,
         status=pov.status,
@@ -78,7 +79,8 @@ def _readiness(pov: PovOwnerView, parts: dict[str, object], actor: str) -> Readi
         passed=passed,
         total=len(checks),
         checks=checks,  # type: ignore[arg-type]
-        allowed_transitions=allowed_transitions(pov.status, is_owner=is_owner(pov, actor), ready=ready),  # type: ignore[arg-type]
+        is_owner=owner,
+        allowed_transitions=allowed_transitions(pov.status, is_owner=owner, ready=ready),  # type: ignore[arg-type]
     )
 
 
@@ -88,6 +90,15 @@ def get_readiness(repo: LockRepo, pov_id: str, actor: str) -> Readiness | None:
     if pov is None:
         return None
     return _readiness(pov, repo.plan_parts(pov_id), actor)
+
+
+def get_plan(repo: LockRepo, pov_id: str, actor: str) -> dict[str, object] | None:
+    """The whole plan plus its readiness, from one PoV read and one parts read. None = no such PoV."""
+    pov = repo.get_pov(pov_id)
+    if pov is None:
+        return None
+    parts = repo.plan_parts(pov_id)
+    return {"pov": pov, **_rows(parts), "readiness": _readiness(pov, parts, actor)}
 
 
 def _dumps(value: object) -> str:
