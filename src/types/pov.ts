@@ -135,6 +135,14 @@ export interface TransitionIn {
   no_go_threshold?: number | null;
 }
 
+/** POST /{id}/sponsor-agreement: the owner records that the Sponsor agreed to the plan as it stands
+ * (stand-in for the Sponsor's own "Agree to plan"). Needs status "collaborating" and the other five
+ * checks passing. Returns Readiness; same 403/409/422 bodies as transitions. */
+export interface SponsorAgreementIn {
+  /** UUID. */
+  op_id: string;
+}
+
 /** 409 from POST transitions. On "version_conflict" re-read readiness and try again. */
 export interface TransitionConflict {
   code: "invalid_transition" | "version_conflict";

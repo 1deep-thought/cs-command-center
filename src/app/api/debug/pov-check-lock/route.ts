@@ -3,7 +3,7 @@ import { apiBase } from "@/lib/api";
 import { AuthRequiredError, getIdToken } from "@/lib/auth";
 
 // TEMPORARY smoke test for readiness and status moves. Remove with the other debug files.
-// Writes one PoV titled "zz-debug lock ...". About 13 writes at ~7s each, so the limit is raised.
+// Writes one PoV titled "zz-debug lock ...". About 20 writes at ~7s each, so the limit is raised.
 export const maxDuration = 300;
 
 type Step = { step: string; status: number; ok: boolean; note?: string };
@@ -82,8 +82,17 @@ export async function POST(request: Request) {
     const refused = await call("lock without the Sponsor's agreement is refused (expect 422)", `/${id}/transitions`, "POST", { to: "locked", op_id: op() }, 422);
     check("the refusal carries the readiness list", refused?.detail === "not_ready" && refused?.readiness?.passed === 5, refused);
     await call("Go not above No-go is rejected (expect 422)", `/${id}/transitions`, "POST", { to: "locked", op_id: op(), go_threshold: 50, no_go_threshold: 60 }, 422);
-    const after = await call("read PoV", `/${id}`, "GET");
-    check("plan is still collaborating", after?.status === "collaborating", after);
+    const agreed = await call("owner records the Sponsor's agreement", `/${id}/sponsor-agreement`, "POST", { op_id: op() });
+    check("6 of 6 and lock is allowed", agreed?.passed === 6 && agreed?.allowed_transitions?.[0] === "locked", agreed);
+    if (pain?.pain_point_id) await call("edit a pain point after the agreement", `/${id}/pain-points/${pain.pain_point_id}`, "PATCH", { base_version: 1, op_id: op(), title: "Slow weekly reports" });
+    const voided = await call("lock after the edit is refused (expect 422)", `/${id}/transitions`, "POST", { to: "locked", op_id: op() }, 422);
+    check("the edit voided the agreement", voided?.readiness?.checks?.[5]?.problems?.[0]?.code === "plan_changed_since_agreement", voided);
+    await call("owner records the agreement again", `/${id}/sponsor-agreement`, "POST", { op_id: op() });
+    const locked = await call("lock with Go 85 / No-go 55", `/${id}/transitions`, "POST", { to: "locked", op_id: op(), go_threshold: 85, no_go_threshold: 55 });
+    check("locked with thresholds and baseline end date", locked?.status === "locked" && locked?.go_threshold === 85 && locked?.no_go_threshold === 55 && locked?.baseline_end_date === "2027-02-03", locked);
+    await call("lock again (idempotent)", `/${id}/transitions`, "POST", { to: "locked", op_id: op() });
+    if (pain?.pain_point_id) await call("edit after lock is rejected (expect 409)", `/${id}/pain-points/${pain.pain_point_id}`, "PATCH", { base_version: 2, op_id: op(), title: "x" }, 409);
+    await call("agreement after lock is rejected (expect 409)", `/${id}/sponsor-agreement`, "POST", { op_id: op() }, 409);
   }
   return NextResponse.json({ pov_id: id ?? null, all_ok: steps.length > 0 && steps.every((s) => s.ok), steps });
 }

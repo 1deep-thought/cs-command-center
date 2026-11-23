@@ -71,3 +71,22 @@ def test_error_statuses():
 def test_start_collaborating():
     r = client_for(FakeLock(status="draft")).post(f"{URL}/transitions", json={"to": "collaborating", "op_id": str(uuid4())})
     assert r.status_code == 200 and r.json()["status"] == "collaborating"
+
+
+def test_owner_records_sponsor_agreement_then_locks():
+    repo = FakeLock(agreed=False)
+    c = client_for(repo)
+    r = c.post(f"{URL}/sponsor-agreement", json={"op_id": str(uuid4())})
+    assert r.status_code == 200 and (r.json()["passed"], r.json()["allowed_transitions"]) == (6, ["locked"])
+    assert lock(c).json()["status"] == "locked"
+    r = c.post(f"{URL}/sponsor-agreement", json={"op_id": str(uuid4())})  # too late: already locked
+    assert (r.status_code, r.json()["code"]) == (409, "invalid_transition")
+
+
+def test_sponsor_agreement_errors():
+    url = f"{URL}/sponsor-agreement"
+    body = {"op_id": str(uuid4())}
+    assert client_for(FakeLock(agreed=False), email="colleague@x").post(url, json=body).status_code == 403
+    assert client_for(FakeLock(status="draft", agreed=False)).post(url, json=body).status_code == 409
+    assert client_for(FakeLock(agreed=False)).post(url, json={}).status_code == 422
+    assert client_for(FakeLock()).post("/api/py/pov/nope/sponsor-agreement", json=body).status_code == 404

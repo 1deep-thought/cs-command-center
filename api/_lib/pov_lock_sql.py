@@ -86,3 +86,35 @@ IF result = 1 THEN COMMIT TRANSACTION; ELSE ROLLBACK TRANSACTION; END IF;
 SELECT result AS result;
 """
     return sql, params
+
+
+def build_agreement_script(
+    *, pov_table: str, log_table: str, pov_id: str, actor: str, op_id: str, field: str, new_json: str, expected_seq: int
+) -> tuple[str, list[Param]]:
+    """Record the Sponsor's agreement to the plan as it stands: one change-log row at the new seq.
+    Gated on status 'collaborating' and on the seq the checks were read at. Same result codes."""
+    params = [
+        Param("pov_id", "STRING", pov_id),
+        Param("actor", "STRING", actor),
+        Param("op_id", "STRING", op_id),
+        Param("field", "STRING", field),
+        Param("new_json", "STRING", new_json),
+        Param("expected_seq", "INT64", expected_seq),
+    ]
+    sql = f"""
+DECLARE result INT64 DEFAULT 0;
+BEGIN TRANSACTION;
+UPDATE `{pov_table}` SET seq = seq + 1, updated_by = @actor, updated_at = CURRENT_TIMESTAMP()
+  WHERE pov_id = @pov_id AND status = 'collaborating' AND deleted_at IS NULL AND seq = @expected_seq;
+IF @@row_count = 1 THEN
+  INSERT INTO `{log_table}` ({LOG_COLUMNS})
+    SELECT pov_id, seq, @op_id, @actor, 'delphina', 'pov', pov_id, @field, NULL, @new_json, 'all', CURRENT_TIMESTAMP()
+    FROM `{pov_table}` WHERE pov_id = @pov_id;
+  SET result = 1;
+ELSEIF EXISTS (SELECT 1 FROM `{pov_table}` WHERE pov_id = @pov_id AND deleted_at IS NULL) THEN
+  SET result = 2;
+END IF;
+IF result = 1 THEN COMMIT TRANSACTION; ELSE ROLLBACK TRANSACTION; END IF;
+SELECT result AS result;
+"""
+    return sql, params

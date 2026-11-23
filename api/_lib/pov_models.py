@@ -189,6 +189,13 @@ class TransitionIn(Strict):
         return self
 
 
+class SponsorAgreementIn(Strict):
+    """The owner records that the Sponsor agreed to the plan as it stands (stand-in for the Sponsor's
+    own "Agree to plan"). Recording it again for an unchanged plan is a success."""
+
+    op_id: UUID
+
+
 class TransitionConflict(BaseModel):
     """409 body: the plan is not in a status this move starts from, or it changed while locking (retry)."""
 

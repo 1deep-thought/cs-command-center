@@ -11,6 +11,7 @@ import json
 from dataclasses import dataclass
 from datetime import date
 from typing import Literal, Protocol
+from uuid import UUID
 
 from .pov_models import PovOwnerView, Readiness, TransitionIn
 from .pov_rules import DEFAULT_GO, DEFAULT_NO_GO, TRANSITIONS, allowed_transitions, readiness
@@ -42,6 +43,9 @@ class LockRepo(Protocol):
         no_go_threshold: int | None = None,
         baseline_end_date: date | None = None,
         snapshot_json: str | None = None,
+    ) -> int: ...
+    def write_agreement(
+        self, *, pov_id: str, actor: str, op_id: str, detail: dict[str, object], expected_seq: int
     ) -> int: ...
 
 
@@ -147,3 +151,42 @@ def transition(repo: LockRepo, pov_id: str, body: TransitionIn, actor: str) -> T
     if latest.status != from_status:
         return TransitionResult("invalid_transition", latest)
     return TransitionResult("conflict", latest)  # edited while locking: re-read readiness and try again
+
+
+def record_sponsor_agreement(repo: LockRepo, pov_id: str, op_id: UUID, actor: str) -> TransitionResult:
+    """STAND-IN until the Sponsor can agree through their own link: the owner records that the Sponsor
+    agreed. The log row says who recorded it and how, so these can be told apart from real agreements
+    later. The plan must already pass the other five checks; any edit afterwards voids the agreement."""
+    pov = repo.get_pov(pov_id)
+    if pov is None:
+        return TransitionResult("not_found")
+    if not is_owner(pov, actor):
+        return TransitionResult("forbidden", pov)
+    if pov.status != "collaborating":
+        return TransitionResult("invalid_transition", pov)
+    parts = repo.plan_parts(pov_id)
+    state = _readiness(pov, parts, actor)
+    if state.ready:
+        return TransitionResult("applied", pov, readiness=state)  # already agreed to this exact plan
+    if any(not c.ok for c in state.checks if c.key != "sponsor_agreed"):
+        return TransitionResult("not_ready", pov, readiness=state)
+    sponsor = next(
+        s for s in _rows(parts)["stakeholders"]
+        if s.get("is_active") is not False and "sponsor" in (s.get("roles") or [])  # type: ignore[operator]
+    )
+    detail: dict[str, object] = {
+        "method": "recorded_by_owner",
+        "recorded_by": actor,
+        "sponsor_stakeholder_id": sponsor["stakeholder_id"],
+        "sponsor_name": sponsor.get("name"),
+    }
+    code = repo.write_agreement(pov_id=pov_id, actor=actor, op_id=str(op_id), detail=detail, expected_seq=pov.seq)
+    latest = repo.get_pov(pov_id)
+    if code == MISSING or latest is None:
+        return TransitionResult("not_found")
+    state = _readiness(latest, repo.plan_parts(pov_id), actor)
+    if code == APPLIED or state.ready:
+        return TransitionResult("applied", latest, readiness=state)
+    if latest.status != "collaborating":
+        return TransitionResult("invalid_transition", latest)
+    return TransitionResult("conflict", latest)  # edited while recording: check the plan and try again

@@ -11,8 +11,15 @@ from fastapi.responses import JSONResponse
 from api._lib.auth import require_delphina
 from api._lib.auth_core import Principal
 from api._lib.pov_bigquery import CREDENTIALS_ENV
-from api._lib.pov_lock_service import LockRepo, get_readiness, transition
-from api._lib.pov_models import NotReady, PovOwnerView, Readiness, TransitionConflict, TransitionIn
+from api._lib.pov_lock_service import LockRepo, TransitionResult, get_readiness, record_sponsor_agreement, transition
+from api._lib.pov_models import (
+    NotReady,
+    PovOwnerView,
+    Readiness,
+    SponsorAgreementIn,
+    TransitionConflict,
+    TransitionIn,
+)
 
 router = APIRouter(prefix="/api/py/pov", tags=["pov-lock"], dependencies=[Depends(require_delphina)])
 
@@ -20,8 +27,8 @@ Staff = Annotated[Principal, Depends(require_delphina)]
 PovId = Annotated[str, Path(min_length=1, max_length=64)]
 
 CONFLICT_TEXT = {
-    "invalid_transition": "The plan is not in a status this move starts from.",
-    "version_conflict": "The plan changed while it was being locked. Check readiness and try again.",
+    "invalid_transition": "The plan is not in a status this starts from.",
+    "version_conflict": "The plan changed at the same moment. Check readiness and try again.",
 }
 
 
@@ -45,13 +52,8 @@ def read_readiness(pov_id: PovId, staff: Staff, repo: Repo) -> Readiness:
     return state
 
 
-@router.post(
-    "/{pov_id}/transitions",
-    response_model=PovOwnerView,
-    responses={409: {"model": TransitionConflict}, 422: {"model": NotReady}},
-)
-def move(pov_id: PovId, body: TransitionIn, staff: Staff, repo: Repo):
-    result = transition(repo, pov_id, body, staff.email)
+def _refusal(result: TransitionResult):
+    """Shared error mapping. Returns a response for 409/422 bodies, raises for 403/404, None on success."""
     if result.kind == "not_found":
         raise HTTPException(status_code=404, detail="pov_not_found")
     if result.kind == "forbidden":
@@ -60,11 +62,33 @@ def move(pov_id: PovId, body: TransitionIn, staff: Staff, repo: Repo):
         raise HTTPException(status_code=422, detail=result.code)
     if result.kind == "not_ready":
         assert result.readiness is not None
-        body_out = NotReady(detail="not_ready", readiness=result.readiness)
-        return JSONResponse(status_code=422, content=body_out.model_dump(mode="json"))
-    assert result.pov is not None
+        body = NotReady(detail="not_ready", readiness=result.readiness)
+        return JSONResponse(status_code=422, content=body.model_dump(mode="json"))
     if result.kind in ("invalid_transition", "conflict"):
+        assert result.pov is not None
         code = "invalid_transition" if result.kind == "invalid_transition" else "version_conflict"
         conflict = TransitionConflict(code=code, message=CONFLICT_TEXT[code], current=result.pov)
         return JSONResponse(status_code=409, content=conflict.model_dump(mode="json"))
-    return result.pov
+    return None
+
+
+@router.post(
+    "/{pov_id}/transitions",
+    response_model=PovOwnerView,
+    responses={409: {"model": TransitionConflict}, 422: {"model": NotReady}},
+)
+def move(pov_id: PovId, body: TransitionIn, staff: Staff, repo: Repo):
+    result = transition(repo, pov_id, body, staff.email)
+    return _refusal(result) or result.pov
+
+
+@router.post(
+    "/{pov_id}/sponsor-agreement",
+    response_model=Readiness,
+    responses={409: {"model": TransitionConflict}, 422: {"model": NotReady}},
+)
+def record_agreement(pov_id: PovId, body: SponsorAgreementIn, staff: Staff, repo: Repo):
+    """Stand-in: the owner records the Sponsor's agreement. Needs status 'collaborating' and the other
+    five checks passing. Returns readiness, which is 6 of 6 until the plan is edited again."""
+    result = record_sponsor_agreement(repo, pov_id, body.op_id, staff.email)
+    return _refusal(result) or result.readiness

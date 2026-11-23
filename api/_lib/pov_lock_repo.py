@@ -9,7 +9,7 @@ from .pov_bigquery import pov_table
 from .pov_item_repo import BigQueryItemRepo, _to_query_param
 from .pov_item_specs import CRITERION, MILESTONE, PAIN_POINT, STAKEHOLDER
 from .pov_lock_service import AGREED, AGREED_FIELD, PARTS
-from .pov_lock_sql import build_transition_script
+from .pov_lock_sql import build_agreement_script, build_transition_script
 from .pov_repo import _json, _param
 
 _PART_SPECS = (("pain_points", PAIN_POINT), ("stakeholders", STAKEHOLDER), ("criteria", CRITERION), ("milestones", MILESTONE))
@@ -81,4 +81,22 @@ class BigQueryLockRepo(BigQueryItemRepo):
         rows = self._run(sql, [_to_query_param(p) for p in params], retry=True)
         if not rows:
             raise RuntimeError("transition write returned no result")
+        return int(rows[0]["result"])
+
+    def write_agreement(
+        self, *, pov_id: str, actor: str, op_id: str, detail: dict[str, object], expected_seq: int
+    ) -> int:
+        sql, params = build_agreement_script(
+            pov_table=pov_table("pov"),
+            log_table=pov_table("pov_change_log"),
+            pov_id=pov_id,
+            actor=actor,
+            op_id=op_id,
+            field=AGREED_FIELD,
+            new_json=_json(detail),
+            expected_seq=expected_seq,
+        )
+        rows = self._run(sql, [_to_query_param(p) for p in params], retry=True)
+        if not rows:
+            raise RuntimeError("agreement write returned no result")
         return int(rows[0]["result"])

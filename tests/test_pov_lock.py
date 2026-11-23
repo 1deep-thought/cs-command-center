@@ -8,8 +8,8 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from api._lib.pov_lock_service import get_readiness, transition
-from api._lib.pov_lock_sql import build_transition_script
+from api._lib.pov_lock_service import get_readiness, record_sponsor_agreement, transition
+from api._lib.pov_lock_sql import build_agreement_script, build_transition_script
 from api._lib.pov_models import TransitionIn
 from api._lib.pov_rules import READINESS_KEYS, allowed_transitions, readiness
 from tests.test_pov_items import pov
@@ -169,6 +169,21 @@ class FakeLock:
         return 1
 
 
+    def write_agreement(self, *, pov_id, actor, op_id, detail, expected_seq):
+        if self.edit_before_write:
+            self.pov = self.pov.model_copy(update={"seq": self.pov.seq + 1})
+        if self.pov.status != "collaborating" or expected_seq != self.pov.seq:
+            return 2
+        self.writes.append({"agreement": detail})
+        self.pov = self.pov.model_copy(update={"seq": self.pov.seq + 1})
+        self.parts["sponsor_agreed_seq"] = self.pov.seq
+        return 1
+
+
+def agree(repo, actor=OWNER):
+    return record_sponsor_agreement(repo, "p1", uuid4(), actor)
+
+
 def move(repo, to, actor=OWNER, **fields):
     return transition(repo, "p1", TransitionIn(to=to, op_id=uuid4(), **fields), actor)
 
@@ -279,3 +294,54 @@ def test_lock_sql_is_gated_on_seq_and_snapshots_then_logs_in_the_same_transactio
 def test_lock_sql_refuses_to_build_without_everything_it_freezes():
     with pytest.raises(ValueError):
         script("locked", expected_seq=5, go_threshold=80, no_go_threshold=60)
+
+
+# ------------------------------------------------------------------ owner-recorded Sponsor agreement
+
+
+def test_owner_records_the_agreement_then_the_plan_can_lock():
+    repo = FakeLock(agreed=False)
+    result = agree(repo)
+    assert result.kind == "applied" and result.readiness.ready and result.readiness.allowed_transitions == ["locked"]
+    detail = repo.writes[0]["agreement"]
+    assert detail == {"method": "recorded_by_owner", "recorded_by": OWNER, "sponsor_stakeholder_id": "s1", "sponsor_name": None}
+    assert agree(repo).kind == "applied" and len(repo.writes) == 1  # unchanged plan: nothing new to record
+    assert move(repo, "locked").pov.status == "locked"
+
+
+def test_an_edit_after_the_recorded_agreement_needs_a_new_one():
+    repo = FakeLock(agreed=False)
+    agree(repo)
+    repo.pov = repo.pov.model_copy(update={"seq": repo.pov.seq + 1})  # someone edits the plan
+    assert move(repo, "locked").kind == "not_ready"
+    assert agree(repo).readiness.ready and len(repo.writes) == 2
+
+
+def test_agreement_needs_the_owner_a_collaborating_plan_and_the_other_five_checks():
+    assert agree(FakeLock(agreed=False), actor="colleague@x").kind == "forbidden"
+    assert agree(FakeLock(status="draft", agreed=False)).kind == "invalid_transition"
+    assert agree(FakeLock(status="locked")).kind == "invalid_transition"
+    parts = ready_parts()
+    parts["criteria"][0]["weight_pct"] = 50
+    repo = FakeLock(parts=parts, agreed=False)
+    result = agree(repo)
+    assert result.kind == "not_ready" and not repo.writes
+    assert [c.key for c in result.readiness.checks if not c.ok] == ["criteria", "sponsor_agreed"]
+    assert record_sponsor_agreement(FakeLock(), "nope", uuid4(), OWNER).kind == "not_found"
+
+
+def test_an_edit_while_recording_the_agreement_is_a_conflict():
+    repo = FakeLock(agreed=False)
+    repo.edit_before_write = True
+    assert agree(repo).kind == "conflict" and not repo.writes
+
+
+def test_agreement_sql_is_gated_on_status_and_seq_and_logs_at_the_new_seq():
+    sql, params = build_agreement_script(
+        pov_table="p.d.pov", log_table="p.d.log", pov_id="p1", actor="a", op_id="o", field="sponsor_agreed",
+        new_json="{}", expected_seq=5,
+    )
+    assert "status = 'collaborating'" in sql and "AND seq = @expected_seq" in sql
+    assert "'pov', pov_id, @field, NULL, @new_json" in sql and "version" not in sql
+    assert sql.index("UPDATE `p.d.pov`") < sql.index("INSERT INTO `p.d.log`") < sql.index("COMMIT")
+    assert next(p for p in params if p.name == "field").value == "sponsor_agreed"
