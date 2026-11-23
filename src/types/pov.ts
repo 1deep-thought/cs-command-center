@@ -68,6 +68,8 @@ export interface PovListItem {
   owner_email: string;
   version: number;
   updated_at: string;
+  /** The decision milestone's date, when the plan has one. */
+  decision_date: string | null;
 }
 
 /** 422 from PATCH when the merged plan is invalid: `detail` is one of these codes. Pydantic

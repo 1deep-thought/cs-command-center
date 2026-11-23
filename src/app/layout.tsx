@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
-import type { ReactNode } from "react";
+import { Suspense, type ReactNode } from "react";
 import { Geist, Geist_Mono } from "next/font/google";
+import { AppBar, AppBarFallback } from "@/components/app-bar";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -25,6 +26,10 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full bg-white font-sans text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
+        {/* The path is request-time data, so the bar that marks the current page streams in. */}
+        <Suspense fallback={<AppBarFallback />}>
+          <AppBar />
+        </Suspense>
         {children}
       </body>
     </html>

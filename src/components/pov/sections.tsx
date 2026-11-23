@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import { CELL, KPI_CELL, KPI_FOOT, KPI_LABEL, KPI_VALUE, ROW, TABLE_FRAME } from "@/components/renewals/layout";
-import type { PovOwnerView } from "@/types/pov";
+import type { PovOwnerView, ReadinessCheck } from "@/types/pov";
 import type {
   Criterion,
   CriterionLink,
@@ -16,7 +16,7 @@ import type {
   StakeholderRole,
 } from "@/types/pov-items";
 import { ITEM_LIMITS, MILESTONE_KINDS } from "@/types/pov-items";
-import { AddRow, Chip, EditText, FIELD, Pick, Remove } from "./controls";
+import { AddRow, Chip, EditText, Pick, Remove } from "./controls";
 import {
   DASH,
   addDays,
@@ -33,13 +33,15 @@ import { EVIDENCE_LABEL, MILESTONE_LABEL, ROLE_LABEL, SOLVE_LABEL } from "./labe
 import {
   BAD,
   BUTTON,
+  FIELD,
+  FIELD_INVALID,
+  GLYPH,
   GOOD,
   LINK,
   MUTED,
   POV_TABLE,
   ROW_ANCHOR,
   ROW_SM,
-  SECTION_COUNT,
   SECTION_HEAD,
   SECTION_TITLE,
   TH,
@@ -52,27 +54,45 @@ import type { Editor } from "./use-plan-store";
 type Edit = Editor | null;
 type Column = { label: string; width?: number | string; align?: "right" };
 
+/** What the lock checks say about one section, shown at the right of its title. */
+export type SectionState = { checks: ReadinessCheck[]; stale: boolean } | null;
+
 export function Section({
   title,
-  count,
+  state = null,
   columns,
   actionsWidth = 44,
   footer,
   children,
 }: {
   title: string;
-  count?: string;
+  /** Null on read-only plans: nothing left to fix there. */
+  state?: SectionState;
   columns: readonly Column[];
   actionsWidth?: number;
   footer?: ReactNode;
   children: ReactNode;
 }) {
   const all: Column[] = [...columns, { label: "", width: actionsWidth }];
+  const toFix = state ? state.checks.reduce((n, c) => n + c.problems.length, 0) : 0;
   return (
     <section className="flex flex-col gap-1.5">
       <div className={SECTION_HEAD}>
         <h2 className={SECTION_TITLE}>{title}</h2>
-        {count ? <span className={SECTION_COUNT}>{count}</span> : null}
+        {state ? (
+          <span className={`ml-auto text-xs tabular-nums ${state.stale ? "opacity-50" : ""} ${toFix === 0 ? GOOD : WARN}`}>
+            {toFix === 0 ? (
+              <>
+                <span aria-hidden="true">✓ </span>Ready
+              </>
+            ) : (
+              <>
+                <span aria-hidden="true">! </span>
+                {toFix} to fix
+              </>
+            )}
+          </span>
+        ) : null}
       </div>
       <div className={`${TABLE_FRAME} overflow-x-auto`}>
         <table className={POV_TABLE}>
@@ -146,23 +166,23 @@ export function Summary({ plan }: { plan: PlanView }) {
   return (
     <div className="grid grid-cols-1 gap-px overflow-hidden rounded-md border border-zinc-200 bg-zinc-200 lg:grid-cols-[2fr_1fr_1fr] dark:border-zinc-800 dark:bg-zinc-800">
       <div className={KPI_CELL}>
-        <span className={KPI_LABEL}>Annual value at stake</span>
+        <span className={KPI_LABEL}>Value of solving these, per year</span>
         <span className={KPI_VALUE}>{range(total)}</span>
         <span className={`${KPI_FOOT} ${MUTED}`}>
           <span className="truncate">
-            Prospect-stated {range(stated)} · Verified {range(verified)}
+            Customer estimate {range(stated)} · Verified {range(verified)}
           </span>
           {unvalued > 0 ? <Flag tone={`whitespace-nowrap ${WARN}`}>{unvalued} without a value</Flag> : null}
         </span>
       </div>
       <div className={KPI_CELL}>
-        <span className={KPI_LABEL}>Weight</span>
+        <span className={KPI_LABEL}>Criteria weighting</span>
         <span className={KPI_VALUE}>{criteria.length === 0 ? DASH : `${weight} / 100`}</span>
         <span className={KPI_FOOT}>
           {criteria.length === 0 ? (
             <span className={MUTED}>No criteria yet</span>
           ) : left === 0 ? (
-            <span className={GOOD}>Fully allocated</span>
+            <span className={GOOD}>Adds up to 100</span>
           ) : left > 0 ? (
             <span className={WARN}>{left} left</span>
           ) : (
@@ -171,7 +191,7 @@ export function Summary({ plan }: { plan: PlanView }) {
         </span>
       </div>
       <div className={KPI_CELL}>
-        <span className={KPI_LABEL}>Exercise length</span>
+        <span className={KPI_LABEL}>Kickoff to decision</span>
         <span className={KPI_VALUE}>{length === null ? DASH : plural(length, "day")}</span>
         <span className={`${KPI_FOOT} ${MUTED}`}>
           {length === null ? "Set kickoff and decision dates" : `${formatDay(kickoff)} – ${formatDay(decision)}`}
@@ -185,11 +205,11 @@ export function LockedBanner({ pov }: { pov: PovOwnerView }) {
   if (pov.status !== "locked" && pov.status !== "decided") return null;
   return (
     <p className="flex min-h-9 flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs text-zinc-600 tabular-nums dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">
-      <span className="font-medium text-zinc-900 dark:text-zinc-100">Locked</span>
-      <span>Read-only</span>
-      <span>Go at {pov.go_threshold ?? DASH} or more</span>
-      <span>No-go below {pov.no_go_threshold ?? DASH}</span>
-      <span>Baseline end {formatDate(pov.baseline_end_date)}</span>
+      <span className="text-[13px] font-medium text-zinc-900 dark:text-zinc-100">
+        Go at {pov.go_threshold ?? DASH} or more · No-go below {pov.no_go_threshold ?? DASH}
+      </span>
+      <span>Baseline measured to {formatDate(pov.baseline_end_date)}</span>
+      <span>Plan locked, read-only</span>
     </p>
   );
 }
@@ -205,11 +225,11 @@ const STAKEHOLDER_COLUMNS = [
 const ROLES = Object.keys(ROLE_LABEL) as StakeholderRole[];
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
-export function Stakeholders({ items, edit }: { items: Stakeholder[]; edit: Edit }) {
+export function Stakeholders({ items, edit, state }: { items: Stakeholder[]; edit: Edit; state: SectionState }) {
   const sponsor = items.find((s) => s.is_active && s.roles.includes("sponsor"));
   const full = items.length >= ITEM_LIMITS.stakeholders;
   return (
-    <Section title="Stakeholders" count={`${items.length} of ${ITEM_LIMITS.stakeholders}`} columns={STAKEHOLDER_COLUMNS} actionsWidth={112}>
+    <Section title="Stakeholders" state={state} columns={STAKEHOLDER_COLUMNS} actionsWidth={150}>
       {items.length === 0 && !edit ? <EmptyRow span={STAKEHOLDER_COLUMNS.length}>No stakeholders.</EmptyRow> : null}
       {items.map((s) => {
         const patch = (changes: Record<string, unknown>) => edit?.patch("stakeholder", s.stakeholder_id, changes);
@@ -226,7 +246,7 @@ export function Stakeholders({ items, edit }: { items: Stakeholder[]; edit: Edit
           <tr
             key={s.stakeholder_id}
             id={rowId.stakeholder(s.stakeholder_id)}
-            className={`${ROW_SM} ${ROW_ANCHOR} ${s.is_active ? "" : "text-zinc-400 dark:text-zinc-500"}`}
+            className={`group/row ${ROW_SM} ${ROW_ANCHOR} ${s.is_active ? "" : "text-zinc-500 dark:text-zinc-400"}`}
           >
             <td className={`${CELL} font-medium`}>
               <EditText value={s.name} onCommit={(name) => patch({ name })} editable={Boolean(edit)} label="Name" required maxLength={120} />
@@ -271,7 +291,7 @@ export function Stakeholders({ items, edit }: { items: Stakeholder[]; edit: Edit
                     editable
                     label="Add a role"
                     empty="+ role"
-                    className="w-20 text-xs"
+                    inline
                   />
                 ) : null}
                 {!edit && s.roles.length === 0 && s.is_active ? <span className={MUTED}>{DASH}</span> : null}
@@ -285,9 +305,9 @@ export function Stakeholders({ items, edit }: { items: Stakeholder[]; edit: Edit
                     onClick={() => patch({ is_active: !s.is_active })}
                     aria-label={s.is_active ? `Mark ${s.name} as having left the deal` : `Mark ${s.name} as back on the deal`}
                     title={s.is_active ? "This person has left the deal. They stay on the plan, greyed out." : "This person is back on the deal."}
-                    className="h-6 rounded px-1 text-xs text-zinc-400 hover:text-zinc-700 focus-visible:outline-2 focus-visible:outline-zinc-400 dark:hover:text-zinc-200"
+                    className={`h-6 rounded px-1 text-xs [@media(hover:hover)]:opacity-0 group-focus-within/row:opacity-100! group-hover/row:opacity-100! focus-visible:opacity-100! focus-visible:outline-2 focus-visible:outline-zinc-400 ${GLYPH}`}
                   >
-                    {s.is_active ? "Left" : "Back"}
+                    {s.is_active ? "Mark as left" : "Mark as back"}
                   </button>
                   <Remove onRemove={() => edit.remove("stakeholder", s.stakeholder_id)} label={s.name} />
                 </>
@@ -299,7 +319,7 @@ export function Stakeholders({ items, edit }: { items: Stakeholder[]; edit: Edit
       {edit ? (
         <AddRow
           span={STAKEHOLDER_COLUMNS.length + 1}
-          placeholder={items.length === 0 ? "Add the Sponsor first: type a name, press Enter" : "Add a stakeholder: type a name, press Enter"}
+          label={items.length === 0 ? "Add the Sponsor first" : "Add stakeholder"}
           full={full ? "This plan has the maximum of 25 stakeholders." : undefined}
           onAdd={(name) =>
             edit.create("stakeholder", { name }, { name, email: null, job_title: null, roles: [], is_active: true })
@@ -316,7 +336,7 @@ const PAIN_COLUMNS = [
   { label: "Pain point" },
   { label: "Value / yr", width: 210, align: "right" },
   { label: "Time to solve", width: 150 },
-  { label: "Coverage", width: 160 },
+  { label: "Proven by", width: 170 },
 ] as const;
 const SOLVE_OPTIONS = (Object.keys(SOLVE_LABEL) as SolveBucket[]).map((value) => ({ value, label: SOLVE_LABEL[value] }));
 
@@ -359,7 +379,7 @@ function RangeEdit({ point, edit }: { point: PainPoint; edit: Editor }) {
     );
   }
 
-  const input = `${FIELD} w-[72px] text-right tabular-nums ${problem ? "border-rose-400 hover:border-rose-400" : ""}`;
+  const input = `${FIELD} w-[72px] text-right tabular-nums ${problem ? FIELD_INVALID : ""}`;
   return (
     <span
       className="flex items-center justify-end gap-1"
@@ -397,10 +417,10 @@ function PainPointRow({ point: p, links, currency, edit }: { point: PainPoint; l
   const valued = p.value_low_minor !== null && p.value_high_minor !== null;
   const patch = (changes: Record<string, unknown>) => edit?.patch("pain_point", p.pain_point_id, changes);
   const source =
-    p.value_source === "verified" ? `Verified by ${p.verified_by ?? DASH}` : valued ? "Prospect-stated" : null;
+    p.value_source === "verified" ? `Verified by ${p.verified_by ?? DASH}` : valued ? "Customer estimate" : null;
   return (
     <>
-      <tr id={rowId.pain_point(p.pain_point_id)} className={`${ROW} ${ROW_ANCHOR}`}>
+      <tr id={rowId.pain_point(p.pain_point_id)} className={`group/row ${ROW} ${ROW_ANCHOR}`}>
         <td className={CELL}>
           <span className="flex items-center gap-1">
             <button
@@ -408,7 +428,7 @@ function PainPointRow({ point: p, links, currency, edit }: { point: PainPoint; l
               aria-expanded={open}
               aria-label={open ? "Hide details" : "Show details"}
               onClick={() => setOpen((v) => !v)}
-              className="h-6 w-4 shrink-0 text-xs text-zinc-400 hover:text-zinc-700 focus-visible:outline-2 focus-visible:outline-zinc-400 dark:hover:text-zinc-200"
+              className={`h-6 w-4 shrink-0 text-xs focus-visible:outline-2 focus-visible:outline-zinc-400 ${GLYPH}`}
             >
               {open ? "▾" : "▸"}
             </button>
@@ -433,9 +453,9 @@ function PainPointRow({ point: p, links, currency, edit }: { point: PainPoint; l
         </td>
         <td className={`${CELL} text-xs`}>
           {covered > 0 ? (
-            <span className={MUTED}>Covered by {plural(covered, "criterion", "criteria")}</span>
+            <span className={MUTED}>{plural(covered, "criterion", "criteria")}</span>
           ) : (
-            <Flag tone={BAD}>No criterion</Flag>
+            <Flag tone={BAD}>Nothing proves this yet</Flag>
           )}
         </td>
         <td className="pr-2 text-right">{edit ? <Remove onRemove={() => edit.remove("pain_point", p.pain_point_id)} label={p.title} /> : null}</td>
@@ -481,10 +501,22 @@ function PainPointRow({ point: p, links, currency, edit }: { point: PainPoint; l
   );
 }
 
-export function PainPoints({ items, links, currency, edit }: { items: PainPoint[]; links: CriterionLink[]; currency: string; edit: Edit }) {
+export function PainPoints({
+  items,
+  links,
+  currency,
+  edit,
+  state,
+}: {
+  items: PainPoint[];
+  links: CriterionLink[];
+  currency: string;
+  edit: Edit;
+  state: SectionState;
+}) {
   const max = Math.max(0, ...items.map((p) => p.position ?? 0));
   return (
-    <Section title="Pain points" count={`${items.length} of ${ITEM_LIMITS.pain_points}`} columns={PAIN_COLUMNS}>
+    <Section title="Pain points" state={state} columns={PAIN_COLUMNS}>
       {items.length === 0 && !edit ? <EmptyRow span={PAIN_COLUMNS.length}>No pain points.</EmptyRow> : null}
       {items.map((p) => (
         <PainPointRow key={p.pain_point_id} point={p} links={links} currency={currency} edit={edit} />
@@ -492,7 +524,7 @@ export function PainPoints({ items, links, currency, edit }: { items: PainPoint[
       {edit ? (
         <AddRow
           span={PAIN_COLUMNS.length + 1}
-          placeholder="Add a pain point: type a short title, press Enter"
+          label="Add pain point"
           full={items.length >= ITEM_LIMITS.pain_points ? "This plan has the maximum of 5 pain points." : undefined}
           onAdd={(title) =>
             edit.create(
@@ -516,7 +548,7 @@ const CRITERIA_COLUMNS = [
   { label: "Criterion" },
   { label: "Target", width: 236 },
   { label: "Weight", width: 68, align: "right" },
-  { label: "Scorer", width: 150 },
+  { label: "Who scores it", width: 150 },
   { label: "Evidence", width: 150 },
 ] as const;
 const EVIDENCE_OPTIONS = (Object.keys(EVIDENCE_LABEL) as EvidenceSource[]).map((value) => ({ value, label: EVIDENCE_LABEL[value] }));
@@ -549,8 +581,8 @@ function CriterionRow({
   if (c.scorer_id && !scorer) scorers.push({ value: c.scorer_id, label: "No longer on the plan" });
 
   return (
-    <tr id={rowId.criterion(c.criterion_id)} className={`${ROW} ${ROW_ANCHOR}`}>
-      <td className={`${CELL} py-1`}>
+    <tr id={rowId.criterion(c.criterion_id)} className={`group/row ${ROW} ${ROW_ANCHOR}`}>
+      <td className={CELL}>
         <span className="block font-medium text-zinc-900 dark:text-zinc-100">
           <EditText value={c.statement} onCommit={(statement) => patch({ statement })} editable={Boolean(edit)} label="Criterion" required maxLength={300} />
         </span>
@@ -575,7 +607,7 @@ function CriterionRow({
               editable
               label="Link a pain point this criterion solves"
               empty="+ pain point"
-              className="h-5 w-28 text-xs"
+              inline
             />
           ) : null}
         </span>
@@ -666,12 +698,14 @@ export function Criteria({
   painPoints,
   stakeholders,
   edit,
+  state,
 }: {
   items: Criterion[];
   links: CriterionLink[];
   painPoints: PainPoint[];
   stakeholders: Stakeholder[];
   edit: Edit;
+  state: SectionState;
 }) {
   const total = items.reduce((t, c) => t + c.weight_pct, 0);
   const left = 100 - total;
@@ -686,7 +720,7 @@ export function Criteria({
       </p>
     );
   return (
-    <Section title="Success criteria" count={`${items.length} of ${ITEM_LIMITS.criteria}`} columns={CRITERIA_COLUMNS} footer={footer}>
+    <Section title="Success criteria" state={state} columns={CRITERIA_COLUMNS} footer={footer}>
       {items.length === 0 && !edit ? <EmptyRow span={CRITERIA_COLUMNS.length}>No success criteria.</EmptyRow> : null}
       {items.map((c) => (
         <CriterionRow key={c.criterion_id} criterion={c} links={links} painPoints={painPoints} stakeholders={stakeholders} edit={edit} />
@@ -694,7 +728,7 @@ export function Criteria({
       {edit ? (
         <AddRow
           span={CRITERIA_COLUMNS.length + 1}
-          placeholder="Add a success criterion: type what must be true, press Enter (2 to 6, weights totalling 100)"
+          label="Add success criterion"
           full={items.length >= ITEM_LIMITS.criteria ? "This plan has the maximum of 6 success criteria." : undefined}
           onAdd={(statement) =>
             edit.create(
@@ -746,7 +780,7 @@ function DateEdit({ value, label, onCommit }: { value: string; label: string; on
         const next = e.currentTarget.value; // the field's own value: Escape may have just reset the draft
         if (!next || next === value || !onCommit(next)) setDraft(value);
       }}
-      className={`${FIELD} -mx-1.5 ${draft ? "" : "text-zinc-400"}`}
+      className={`${FIELD} -mx-1.5 w-full ${draft ? "" : "text-zinc-500! dark:text-zinc-400!"}`}
     />
   );
 }
@@ -766,10 +800,10 @@ function dateProblem(items: Milestone[], kind: MilestoneKind, date: string): str
   return null;
 }
 
-export function Timeline({ items, edit }: { items: Milestone[]; edit: Edit }) {
+export function Timeline({ items, edit, state }: { items: Milestone[]; edit: Edit; state: SectionState }) {
   const kickoff = items.find((m) => m.kind === "kickoff")?.due_date ?? null;
   return (
-    <Section title="Timeline" columns={TIMELINE_COLUMNS}>
+    <Section title="Timeline" state={state} columns={TIMELINE_COLUMNS}>
       {MILESTONE_KINDS.map((kind) => {
         const m = items.find((item) => item.kind === kind);
         const offset = m ? daysBetween(kickoff, m.due_date) : null;
@@ -786,7 +820,7 @@ export function Timeline({ items, edit }: { items: Milestone[]; edit: Edit }) {
           return true;
         };
         return (
-          <tr key={kind} id={m ? rowId.milestone(m.milestone_id) : undefined} className={`${ROW_SM} ${ROW_ANCHOR}`}>
+          <tr key={kind} id={m ? rowId.milestone(m.milestone_id) : undefined} className={`group/row ${ROW_SM} ${ROW_ANCHOR}`}>
             <td className={`${CELL} font-medium`}>
               {MILESTONE_LABEL[kind]}
               {kind === "readout" ? <span className={`ml-1.5 text-xs font-normal ${MUTED}`}>optional</span> : null}

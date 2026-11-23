@@ -1,4 +1,3 @@
-import Link from "next/link";
 import type { RenewalsResponse } from "@/types/renewals";
 import { formatDateShort } from "./format";
 import { HEADER_ROW } from "./layout";
@@ -24,12 +23,6 @@ export function RenewalsHeader({ data }: { data: RenewalsResponse }) {
         <span className="text-xs text-zinc-500 tabular-nums dark:text-zinc-400">
           Data as of {formatDateShort(summary.as_of_date)}
         </span>
-        <Link
-          href="/pov"
-          className="text-xs text-zinc-600 underline decoration-zinc-300 underline-offset-2 hover:text-zinc-900 dark:text-zinc-400 dark:decoration-zinc-600 dark:hover:text-zinc-100"
-        >
-          Proof of Value
-        </Link>
         {data.data_source === "mock" ? (
           <span className="inline-flex h-5 items-center rounded border border-zinc-200 px-1.5 text-[11px] leading-none text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
             Mock data

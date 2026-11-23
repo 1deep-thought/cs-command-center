@@ -124,9 +124,13 @@ class BigQueryPovRepo:
 
     def list(self) -> list[PovListItem]:
         # Delphina staff see every PoV; the table is small. Capped, newest first.
+        # The decision date comes from the plan's decision milestone: one grouped subquery, joined on
+        # the PoV id (both tables are small and clustered on pov_id).
         rows = self._run(
-            f"SELECT {LIST_COLUMNS} FROM `{pov_table('pov')}` WHERE deleted_at IS NULL "
-            "ORDER BY updated_at DESC LIMIT 200",
+            f"SELECT {LIST_COLUMNS}, d.decision_date FROM `{pov_table('pov')}` p "
+            f"LEFT JOIN (SELECT pov_id, MAX(due_date) AS decision_date FROM `{pov_table('milestone')}` "
+            "WHERE kind = 'decision' AND deleted_at IS NULL GROUP BY pov_id) d USING (pov_id) "
+            "WHERE p.deleted_at IS NULL ORDER BY updated_at DESC LIMIT 200",
             [],
         )
         return [PovListItem(**dict(r.items())) for r in rows]

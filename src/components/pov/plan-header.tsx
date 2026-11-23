@@ -4,16 +4,15 @@ import Link from "next/link";
 import { useId, useRef, useState, type ReactNode } from "react";
 import { HEADER_ROW } from "@/components/renewals/layout";
 import type { PovOwnerView, Readiness, ReadinessProblem } from "@/types/pov";
-import { CHECK_LABEL, PROBLEM_FALLBACK, PROBLEM_TEXT, STATUS_LABEL } from "./labels";
-import { BAD, BUTTON, GOOD, INPUT, LINK, MUTED, PRIMARY, STICKY_HEAD, rowId } from "./layout";
-import { StatusBadge } from "./status-badge";
+import { CHECK_LABEL, DECISION_LABEL, DECISION_TEXT, PROBLEM_FALLBACK, PROBLEM_TEXT, STATUS_LABEL, STATUS_ORDER } from "./labels";
+import { BAD, BUTTON, INPUT, LINK, MUTED, PILL, PRIMARY, STEPPER, STICKY_HEAD, TONE_GOOD, TONE_WARN, WARN, rowId } from "./layout";
 
 type Action = "start" | "agree" | "lock";
 type Notice = { text: string; tone: "bad" | "info"; recheck?: boolean };
 
 const ACTION_LABEL: Record<Action, [idle: string, busy: string]> = {
   start: ["Start collaborating", "Starting…"],
-  agree: ["Record Sponsor's agreement", "Recording…"],
+  agree: ["Sponsor has agreed", "Recording…"],
   lock: ["Lock plan", "Locking…"],
 };
 const SLOW_AFTER_MS = 4000;
@@ -68,6 +67,8 @@ export function PlanHeader({
 
   const frozen = pov.status === "locked" || pov.status === "decided";
   const failing = readiness.checks.filter((c) => !c.ok);
+  const passed = readiness.checks.filter((c) => c.ok);
+  const toFix = failing.reduce((n, c) => n + c.problems.length, 0);
   const othersPass = failing.every((c) => c.key === "sponsor_agreed");
   const action: Action | null = !readiness.is_owner
     ? null
@@ -140,8 +141,8 @@ export function PlanHeader({
         setReadiness(latest);
         setOpen(true);
         setConfirmLock(false);
-        const count = latest.checks.filter((c) => !c.ok).length;
-        setNotice({ text: `Not ready yet. ${count} ${count === 1 ? "check needs" : "checks need"} work.`, tone: "bad" });
+        const count = latest.checks.reduce((n, c) => n + c.problems.length, 0);
+        setNotice({ text: `Not ready yet: ${count} to fix before lock.`, tone: "bad" });
       } else if (res.status === 422) {
         setNotice({ text: "Go must be higher than No-go.", tone: "bad" });
       } else if (res.status === 409 && data?.code === "version_conflict") {
@@ -179,7 +180,7 @@ export function PlanHeader({
       <header className={HEADER_ROW}>
         <div className="flex min-w-0 items-center gap-2.5">
           <Link href="/pov" className={`text-xs ${LINK}`}>
-            PoVs
+            Proof of Value
           </Link>
           <h1
             className="max-w-[40ch] truncate text-[15px] leading-7 font-semibold tracking-tight text-zinc-900 dark:text-zinc-50"
@@ -188,7 +189,6 @@ export function PlanHeader({
             {pov.title}
           </h1>
           <span className={`truncate text-xs ${MUTED}`}>{pov.prospect_name}</span>
-          <StatusBadge status={pov.status} decision={pov.decision} />
         </div>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           {slow ? (
@@ -205,23 +205,18 @@ export function PlanHeader({
               ref={meterRef}
               type="button"
               aria-expanded={open}
-              aria-controls={panelId}
+              aria-controls={open ? panelId : undefined}
               onClick={() => setOpen((v) => !v)}
-              className={`${BUTTON} inline-flex items-center gap-2 ${stale ? "opacity-60" : ""}`}
+              className={`${PILL} ${readiness.ready ? TONE_GOOD : TONE_WARN} ${stale ? "opacity-60" : ""}`}
               title={stale ? "Updating after your changes" : undefined}
             >
-              <span aria-hidden="true" className="flex gap-0.5">
-                {readiness.checks.map((c) => (
-                  <span
-                    key={c.key}
-                    className={`h-2.5 w-1.5 rounded-[1px] ${c.ok ? "bg-zinc-900 dark:bg-zinc-100" : "border border-zinc-300 dark:border-zinc-600"}`}
-                  />
-                ))}
-              </span>
-              <span className={`tabular-nums ${readiness.ready ? GOOD : ""}`}>
-                {readiness.ready ? "✓ " : ""}
-                {readiness.passed} of {readiness.total} ready
-              </span>
+              {readiness.ready ? (
+                <>
+                  <span aria-hidden="true">✓</span> Ready to lock
+                </>
+              ) : (
+                `${toFix} to fix before lock`
+              )}
               <span aria-hidden="true">{open ? "▾" : "▸"}</span>
             </button>
           )}
@@ -265,6 +260,36 @@ export function PlanHeader({
           ) : null}
         </div>
       </header>
+      <ol className={STEPPER} aria-label="Where this plan is">
+        {STATUS_ORDER.map((status, i) => {
+          const at = STATUS_ORDER.indexOf(pov.status);
+          const done = i < at;
+          const current = i === at;
+          return (
+            <li key={status} className="flex items-center gap-2">
+              {i > 0 ? <span aria-hidden="true" className="h-px w-6 bg-zinc-200 dark:bg-zinc-800" /> : null}
+              <span
+                aria-current={current ? "step" : undefined}
+                className={`inline-flex items-center gap-1.5 ${current ? "font-medium text-zinc-900 dark:text-zinc-50" : MUTED}`}
+              >
+                {done ? (
+                  <span aria-hidden="true">✓</span>
+                ) : (
+                  <span
+                    aria-hidden="true"
+                    className={`h-1.5 w-1.5 rounded-full ${current ? "bg-zinc-900 dark:bg-zinc-100" : "border border-zinc-400 dark:border-zinc-500"}`}
+                  />
+                )}
+                {STATUS_LABEL[status]}
+                {done ? <span className="sr-only"> (done)</span> : null}
+                {status === "decided" && current && pov.decision ? (
+                  <span className={DECISION_TEXT[pov.decision]}>· {DECISION_LABEL[pov.decision]}</span>
+                ) : null}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
       {notice ? (
         <p role="alert" className={`mt-1.5 flex items-center justify-end gap-2 text-xs ${notice.tone === "bad" ? BAD : MUTED}`}>
           {notice.text}
@@ -284,39 +309,43 @@ export function PlanHeader({
       {open && !frozen ? (
         <div
           id={panelId}
-          className="mt-2 grid max-h-[40vh] grid-cols-1 gap-px overflow-auto rounded-md border border-zinc-200 bg-zinc-200 sm:grid-cols-3 dark:border-zinc-800 dark:bg-zinc-800"
+          className="mt-2 max-h-[40vh] overflow-auto rounded-md border border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900"
         >
-          {readiness.checks.map((check) => (
-            <div key={check.key} className="bg-white px-3 py-2 text-xs dark:bg-zinc-950">
+          {failing.map((check) => (
+            <div
+              key={check.key}
+              className="grid grid-cols-1 gap-x-3 gap-y-1 border-t border-zinc-200 px-3 py-2 text-xs first:border-t-0 sm:grid-cols-[220px_1fr] dark:border-zinc-800"
+            >
               <p className="font-medium text-zinc-900 dark:text-zinc-100">
-                <span aria-hidden="true" className={check.ok ? GOOD : BAD}>
-                  {check.ok ? "✓ " : "✕ "}
+                <span aria-hidden="true" className={WARN}>
+                  !{" "}
                 </span>
                 {CHECK_LABEL[check.key] ?? check.key}
-                <span className={`ml-1.5 font-normal ${check.ok ? MUTED : BAD}`}>
-                  {check.ok ? "Ready" : `${check.problems.length} to fix`}
-                </span>
               </p>
-              {check.problems.length > 0 ? (
-                <ul className="mt-1 space-y-0.5 text-zinc-600 dark:text-zinc-400">
-                  {check.problems.map((problem, i) => {
-                    const href = anchor(problem);
-                    return (
-                      <li key={`${problem.code}-${problem.item_id ?? i}`}>
-                        {href ? (
-                          <a href={href} className={LINK} onClick={() => setOpen(false)}>
-                            {sentence(problem, names)}
-                          </a>
-                        ) : (
-                          sentence(problem, names)
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              ) : null}
+              <ul className="space-y-0.5 text-zinc-600 dark:text-zinc-400">
+                {check.problems.map((problem, i) => {
+                  const href = anchor(problem);
+                  return (
+                    <li key={`${problem.code}-${problem.item_id ?? i}`}>
+                      {href ? (
+                        <a href={href} className={LINK} onClick={() => setOpen(false)}>
+                          {sentence(problem, names)}
+                        </a>
+                      ) : (
+                        sentence(problem, names)
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
             </div>
           ))}
+          {passed.length > 0 ? (
+            <p className={`border-t border-zinc-200 px-3 py-2 text-xs first:border-t-0 dark:border-zinc-800 ${MUTED}`}>
+              <span aria-hidden="true">✓ </span>
+              {passed.length} ready: {passed.map((check) => CHECK_LABEL[check.key] ?? check.key).join(" · ")}
+            </p>
+          ) : null}
         </div>
       ) : null}
     </div>

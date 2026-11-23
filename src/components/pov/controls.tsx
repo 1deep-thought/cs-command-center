@@ -1,14 +1,15 @@
 "use client";
 
 import { useRef, useState, type ReactNode } from "react";
-import { BAD, MUTED } from "./layout";
+import { ADD_ROW, BAD, FIELD, MUTED, PICK_INLINE } from "./layout";
 
-// Inline controls for the plan tables. They look like text until hovered or focused, save on
-// blur or Enter, and Esc puts the saved value back. With `editable` false they render plain text.
+// Inline controls for the plan tables. Fields carry a faint tint so the plan reads as editable;
+// they save on blur or Enter, and Esc puts the saved value back. With `editable` false they
+// render plain text.
 
-export const FIELD =
-  "h-7 w-full min-w-0 rounded border border-transparent bg-transparent px-1.5 text-[13px] text-inherit placeholder:text-zinc-400 hover:border-zinc-200 focus:border-zinc-400 focus:bg-white focus:outline-none dark:hover:border-zinc-700 dark:focus:border-zinc-500 dark:focus:bg-zinc-950";
 const PULL = "-mx-1.5"; // so the text lines up with read-only cells
+/** Full width unless the caller asked for a width: two width classes on one element would fight. */
+const sized = (className: string) => (/(^|\s)w-/.test(className) ? className : `w-full ${className}`);
 
 export function EditText({
   value,
@@ -68,7 +69,7 @@ export function EditText({
         }
         if (onCommit(next) === false) setDraft(value);
       }}
-      className={`${FIELD} ${PULL} ${className}`}
+      className={`${FIELD} ${PULL} ${sized(className)}`}
     />
   );
 }
@@ -81,6 +82,7 @@ export function Pick<T extends string>({
   label,
   empty = "—",
   className = "",
+  inline = false,
 }: {
   value: T | null;
   options: readonly { value: T; label: string; disabled?: boolean }[];
@@ -90,6 +92,8 @@ export function Pick<T extends string>({
   /** Text of the "nothing chosen" option. */
   empty?: string;
   className?: string;
+  /** The small dashed "+ something" picker that sits next to chips. */
+  inline?: boolean;
 }) {
   if (!editable) {
     const current = options.find((o) => o.value === value);
@@ -100,7 +104,11 @@ export function Pick<T extends string>({
       aria-label={label}
       value={value ?? ""}
       onChange={(e) => onChange((e.target.value || null) as T | null)}
-      className={`${FIELD} ${PULL} ${value ? "" : "text-zinc-400"} ${className}`}
+      className={
+        inline
+          ? `${PICK_INLINE} ${className}`
+          : `${FIELD} ${PULL} cursor-pointer ${value ? "" : "text-zinc-500! dark:text-zinc-400!"} ${sized(className)}`
+      }
     >
       <option value="">{empty}</option>
       {options.map((o) => (
@@ -112,7 +120,8 @@ export function Pick<T extends string>({
   );
 }
 
-/** Two clicks to remove a row: the first asks, the second does it. Moving away cancels. */
+/** Two clicks to remove a row: the first asks, the second does it. Moving away cancels.
+ * Hidden until its row (a `group/row`) is hovered or focused, so the tables stay calm. */
 export function Remove({ onRemove, label }: { onRemove: () => void; label: string }) {
   const [asking, setAsking] = useState(false);
   return (
@@ -121,8 +130,10 @@ export function Remove({ onRemove, label }: { onRemove: () => void; label: strin
       aria-label={asking ? `Confirm: remove ${label}` : `Remove ${label}`}
       onClick={() => (asking ? onRemove() : setAsking(true))}
       onBlur={() => setAsking(false)}
-      className={`h-6 rounded px-1 text-xs focus-visible:outline-2 focus-visible:outline-zinc-400 ${
-        asking ? `font-medium ${BAD}` : "text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
+      className={`h-6 rounded text-xs focus-visible:opacity-100! focus-visible:outline-2 focus-visible:outline-zinc-400 ${
+        asking
+          ? `px-1.5 font-medium ${BAD} bg-rose-50 dark:bg-rose-950/40`
+          : "w-6 text-zinc-500 group-focus-within/row:opacity-100! group-hover/row:opacity-100! hover:bg-rose-50 [@media(hover:hover)]:opacity-0 hover:text-rose-700 dark:text-zinc-400 dark:hover:bg-rose-950/40 dark:hover:text-rose-400"
       }`}
     >
       {asking ? "Remove?" : "×"}
@@ -130,42 +141,49 @@ export function Remove({ onRemove, label }: { onRemove: () => void; label: strin
   );
 }
 
-/** Last row of a table: type a name, press Enter, and the row exists. */
+/** Last row of a table: an obvious "+ Add …" line. Type, press Enter, and the row exists. */
 export function AddRow({
   span,
-  placeholder,
+  label,
   onAdd,
   full,
 }: {
   span: number;
-  placeholder: string;
+  /** "Add pain point" */
+  label: string;
   onAdd: (text: string) => void;
   /** Set when the table is at its limit: shown instead of the input. */
   full?: string;
 }) {
   const [text, setText] = useState("");
   return (
-    <tr className="border-t border-zinc-100 dark:border-zinc-800/70">
-      <td colSpan={span} className="h-9 px-3">
+    <tr className={ADD_ROW}>
+      <td colSpan={span}>
         {full ? (
-          <span className={`text-xs ${MUTED}`}>{full}</span>
+          <span className={`flex h-9 items-center px-3 text-xs ${MUTED}`}>{full}</span>
         ) : (
-          <input
-            aria-label={placeholder}
-            placeholder={placeholder}
-            maxLength={120}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.nativeEvent.isComposing) return;
-              if (e.key === "Enter" && text.trim()) {
-                onAdd(text.trim());
-                setText("");
-              }
-              if (e.key === "Escape") setText("");
-            }}
-            className={`${FIELD} ${PULL} text-xs`}
-          />
+          <label className="flex h-9 cursor-text items-center gap-2 px-3">
+            <span aria-hidden="true" className={`text-sm ${MUTED}`}>
+              +
+            </span>
+            <input
+              aria-label={label}
+              placeholder={label}
+              maxLength={120}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.nativeEvent.isComposing) return;
+                if (e.key === "Enter" && text.trim()) {
+                  onAdd(text.trim());
+                  setText("");
+                }
+                if (e.key === "Escape") setText("");
+              }}
+              className="h-7 min-w-0 flex-1 bg-transparent text-[13px] font-medium placeholder:text-zinc-700 focus:outline-none dark:placeholder:text-zinc-300"
+            />
+            <span className={`text-[11px] opacity-0 group-focus-within:opacity-100 ${MUTED}`}>Enter to add</span>
+          </label>
         )}
       </td>
     </tr>
@@ -174,14 +192,14 @@ export function AddRow({
 
 export function Chip({ children, onRemove, label }: { children: ReactNode; onRemove?: () => void; label: string }) {
   return (
-    <span className="inline-flex h-5 max-w-full shrink-0 items-center gap-1 rounded border border-zinc-200 px-1.5 text-[11px] leading-none font-medium whitespace-nowrap text-zinc-600 dark:border-zinc-700 dark:text-zinc-300">
+    <span className="inline-flex h-5 max-w-full shrink-0 items-center gap-1 rounded border border-zinc-200 bg-zinc-100 px-1.5 text-[11px] leading-none font-medium whitespace-nowrap text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
       <span className="truncate">{children}</span>
       {onRemove ? (
         <button
           type="button"
           aria-label={`Remove ${label}`}
           onClick={onRemove}
-          className="-mr-0.5 text-zinc-400 hover:text-zinc-700 focus-visible:outline-2 focus-visible:outline-zinc-400 dark:hover:text-zinc-200"
+          className="-mr-0.5 text-zinc-500 hover:text-rose-700 focus-visible:outline-2 focus-visible:outline-zinc-400 dark:text-zinc-400 dark:hover:text-rose-400"
         >
           ×
         </button>

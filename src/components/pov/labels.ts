@@ -12,11 +12,17 @@ export const STATUS_LABEL: Record<PovStatus, string> = {
 export const STATUS_BADGE: Record<PovStatus, string> = {
   draft: "border-dashed border-zinc-300 text-zinc-500 dark:border-zinc-600 dark:text-zinc-400",
   collaborating: "border-zinc-300 text-zinc-800 dark:border-zinc-600 dark:text-zinc-200",
-  locked: "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900",
+  locked: "border-zinc-400 bg-zinc-100 text-zinc-900 dark:border-zinc-500 dark:bg-zinc-800 dark:text-zinc-100",
   decided: "border-zinc-300 text-zinc-800 dark:border-zinc-600 dark:text-zinc-200",
 };
 
 export const DECISION_LABEL: Record<PovDecision, string> = { go: "Go", extend: "Extend", no_go: "No-go" };
+// A decided plan shows its decision as the badge: this is the one place status carries color.
+export const DECISION_BADGE: Record<PovDecision, string> = {
+  go: "border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300",
+  extend: "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300",
+  no_go: "border-rose-300 bg-rose-50 text-rose-800 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300",
+};
 export const DECISION_TEXT: Record<PovDecision, string> = {
   go: "text-emerald-700 dark:text-emerald-400",
   extend: "text-amber-700 dark:text-amber-400",
@@ -77,7 +83,7 @@ export const ROLE_LABEL: Record<StakeholderRole, string> = {
 };
 
 export const EVIDENCE_LABEL: Record<EvidenceSource, string> = {
-  prospect_data: "Prospect's data",
+  prospect_data: "Customer's data",
   telemetry: "Product telemetry",
   test_result: "Test result",
   attestation: "Signed statement",
@@ -89,3 +95,5 @@ export const MILESTONE_LABEL: Record<MilestoneKind, string> = {
   readout: "Readout",
   decision: "Decision",
 };
+
+export const STATUS_ORDER: readonly PovStatus[] = ["draft", "collaborating", "locked", "decided"];

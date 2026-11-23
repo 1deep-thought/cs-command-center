@@ -29,3 +29,15 @@ export async function getPlan(povId: string): Promise<PlanView | null> {
   if (!POV_ID.test(povId)) return null;
   return povGet<PlanView>(`/${povId}/plan`);
 }
+
+/** The signed-in person's email, read from the sign-in token WITHOUT verifying it. Only for
+ * display defaults (the "Mine" filter): every permission check stays in the Python API. */
+export async function getViewerEmail(): Promise<string | null> {
+  try {
+    const payload = (await getIdToken()).split(".")[1];
+    const claims = JSON.parse(Buffer.from(payload ?? "", "base64url").toString("utf8")) as { email?: unknown };
+    return typeof claims.email === "string" ? claims.email.trim().toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}

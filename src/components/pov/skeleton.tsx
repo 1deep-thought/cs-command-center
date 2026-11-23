@@ -1,6 +1,9 @@
 import { CELL, HEADER_ROW, KPI_CELL, ROW, SKELETON_BLOCK, TABLE_FRAME } from "@/components/renewals/layout";
-import { ListFrame, ListTitle, LIST_COLUMNS } from "./list";
-import { ROW_SM, SECTION_HEAD, SECTION_TITLE, STICKY_HEAD, TH } from "./layout";
+import { ListTitle } from "./list";
+import { ListFrame } from "./list-view";
+import { ROW_SM, SECTIONS, SECTION_HEAD, SECTION_TITLE, STICKY_HEAD, TABS, TH, listColumns } from "./layout";
+
+const COLUMNS = listColumns(false); // the default view is "Mine", which has no Owner column
 
 function Block({ className }: { className: string }) {
   return <span className={`block ${SKELETON_BLOCK} ${className}`} />;
@@ -17,7 +20,11 @@ export function PovListSkeleton() {
           <Block className="h-7 w-20" />
         </div>
       </div>
-      <ListFrame>
+      <div className={TABS}>
+        <Block className="mb-2 h-3 w-40" />
+        <Block className="mb-1 ml-auto h-7 w-28" />
+      </div>
+      <ListFrame columns={COLUMNS}>
         {Array.from({ length: 8 }, (_, i) => (
           <tr key={i} className={ROW}>
             <td className={CELL}>
@@ -27,11 +34,12 @@ export function PovListSkeleton() {
             <td className={CELL}>
               <Block className="h-5 w-20" />
             </td>
-            {LIST_COLUMNS.slice(2).map((c) => (
-              <td key={c.label} className={CELL}>
-                <Block className={`h-3 w-12 ${c.align === "text-right" ? "ml-auto" : ""}`} />
-              </td>
-            ))}
+            <td className={CELL}>
+              <Block className="h-3 w-20" />
+            </td>
+            <td className={CELL}>
+              <Block className="ml-auto h-3 w-16" />
+            </td>
           </tr>
         ))}
       </ListFrame>
@@ -66,12 +74,12 @@ export function PovPlanSkeleton() {
       <div className={STICKY_HEAD}>
         <div className={HEADER_ROW}>
           <Block className="h-3 w-56" />
-          <Block className="h-5 w-24" />
           <div className="ml-auto flex items-center gap-2">
-            <Block className="h-7 w-28" />
+            <Block className="h-7 w-36" />
             <Block className="h-7 w-36" />
           </div>
         </div>
+        <Block className="mt-2.5 mb-1 h-3 w-80" />
       </div>
       <div className="grid grid-cols-1 gap-px overflow-hidden rounded-md border border-zinc-200 bg-zinc-200 lg:grid-cols-[2fr_1fr_1fr] dark:border-zinc-800 dark:bg-zinc-800">
         {[0, 1, 2].map((i) => (
@@ -82,10 +90,12 @@ export function PovPlanSkeleton() {
           </div>
         ))}
       </div>
-      <SectionSkeleton title="Stakeholders" rows={3} rowClass={ROW_SM} />
-      <SectionSkeleton title="Pain points" rows={3} rowClass={ROW} />
-      <SectionSkeleton title="Success criteria" rows={3} rowClass={ROW} footer />
-      <SectionSkeleton title="Timeline" rows={4} rowClass={ROW_SM} />
+      <div className={SECTIONS}>
+        <SectionSkeleton title="Pain points" rows={3} rowClass={ROW} />
+        <SectionSkeleton title="Success criteria" rows={3} rowClass={ROW} footer />
+        <SectionSkeleton title="Stakeholders" rows={3} rowClass={ROW_SM} />
+        <SectionSkeleton title="Timeline" rows={4} rowClass={ROW_SM} />
+      </div>
     </div>
   );
 }

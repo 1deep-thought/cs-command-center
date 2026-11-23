@@ -128,6 +128,8 @@ class PovListItem(BaseModel):
     owner_email: str
     version: int
     updated_at: datetime
+    # The decision milestone's date, when the plan has one (the list's "Decision by").
+    decision_date: date | None = None
 
 
 class PovConflict(BaseModel):
