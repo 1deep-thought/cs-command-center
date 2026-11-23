@@ -22,7 +22,10 @@ from google.cloud import bigquery
 from .pov_bigquery import get_pov_client, pov_table
 from .pov_models import PATCHABLE_FIELDS, PovCreate, PovListItem, PovOwnerView
 
-BUDGET_S = 8.0  # one deadline for the whole request (every query + retry), under the 10s limit
+BUDGET_S = 8.0  # reads: one deadline for the whole request (every query + retry), under the 10s guardrail
+# Writes are multi-statement BigQuery transactions; measured ~6.7s for one item write (6 child jobs),
+# so a write request gets a longer deadline. vercel.json raises the function limit to match.
+WRITE_BUDGET_S = 20.0
 MAX_ATTEMPTS = 3
 RETRY_MARKERS = ("concurrent update", "aborted", "could not serialize")
 
@@ -93,6 +96,8 @@ class BigQueryPovRepo:
     # -- plumbing ------------------------------------------------------------------
 
     def _run(self, sql: str, params: list[bigquery.ScalarQueryParameter], *, retry: bool = False):
+        if retry:  # retry=True marks a write: it and the read-back after it share the longer deadline
+            self._deadline = max(self._deadline, time.monotonic() + WRITE_BUDGET_S)
         attempt = 0
         while True:
             attempt += 1
