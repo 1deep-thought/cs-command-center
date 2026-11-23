@@ -1,10 +1,7 @@
-import { PAGE_SHELL } from "@/components/renewals/layout";
-import { RenewalsPageSkeleton } from "@/components/renewals/skeleton";
-
 export default function Loading() {
   return (
-    <main className={PAGE_SHELL}>
-      <RenewalsPageSkeleton />
+    <main className="px-6 py-10 text-center text-sm text-zinc-500 dark:text-zinc-400" aria-busy="true">
+      Loading…
     </main>
   );
 }

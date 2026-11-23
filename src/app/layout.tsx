@@ -15,8 +15,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Health & Renewals · CS Command Center",
-  description: "Renewing accounts, ARR at risk, and the evidence behind each risk.",
+  title: "CS Command Center",
+  description: "Customer 360 for CS teams: which accounts need you today, and why.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {

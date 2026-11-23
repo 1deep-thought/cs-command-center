@@ -21,6 +21,7 @@ from api._lib.bigquery import data_source
 from api._lib.mock import mock_accounts
 from api._lib.models import DataSourceName, RenewalsResponse, RenewalWindow
 from api._lib.renewals import build_renewals
+from api.accounts_routes import router as accounts_router
 from api.pov_item_routes import router as pov_item_router
 from api.pov_lock_routes import router as pov_lock_router
 from api.pov_routes import router as pov_router
@@ -86,3 +87,4 @@ app.include_router(guarded)
 app.include_router(pov_router)  # carries its own require_delphina dependency
 app.include_router(pov_item_router)  # same
 app.include_router(pov_lock_router)  # same
+app.include_router(accounts_router)  # same

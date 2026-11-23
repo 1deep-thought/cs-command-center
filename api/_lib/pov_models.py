@@ -130,6 +130,8 @@ class PovListItem(BaseModel):
     updated_at: datetime
     # The decision milestone's date, when the plan has one (the list's "Decision by").
     decision_date: date | None = None
+    # The customer account this PoV belongs to or turned into, when known.
+    account_id: str | None = None
 
 
 class PovConflict(BaseModel):

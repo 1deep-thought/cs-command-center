@@ -70,6 +70,8 @@ export interface PovListItem {
   updated_at: string;
   /** The decision milestone's date, when the plan has one. */
   decision_date: string | null;
+  /** The customer account this PoV belongs to or turned into, when known. */
+  account_id: string | null;
 }
 
 /** 422 from PATCH when the merged plan is invalid: `detail` is one of these codes. Pydantic

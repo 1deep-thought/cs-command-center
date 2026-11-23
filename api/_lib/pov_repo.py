@@ -34,7 +34,9 @@ POV_COLUMNS = (
     "end_date, baseline_end_date, go_threshold, no_go_threshold, owner_email, account_id, "
     "seq, version, created_by, created_at, updated_by, updated_at"
 )
-LIST_COLUMNS = "pov_id, title, prospect_name, status, decision, currency, end_date, owner_email, version, updated_at"
+LIST_COLUMNS = (
+    "pov_id, title, prospect_name, status, decision, currency, end_date, owner_email, version, updated_at, account_id"
+)
 LOG_COLUMNS = (
     "pov_id, seq, op_id, actor, actor_kind, item_kind, item_id, field, old_value, new_value, visibility, changed_at"
 )

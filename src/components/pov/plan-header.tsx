@@ -189,6 +189,11 @@ export function PlanHeader({
             {pov.title}
           </h1>
           <span className={`truncate text-xs ${MUTED}`}>{pov.prospect_name}</span>
+          {pov.account_id && /^acct_[A-Za-z0-9_-]{1,64}$/.test(pov.account_id) ? (
+            <a href={`/#/account/${pov.account_id}`} className={`text-xs whitespace-nowrap ${LINK}`}>
+              Customer account ↗
+            </a>
+          ) : null}
         </div>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           {slow ? (
