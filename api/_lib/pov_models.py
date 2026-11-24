@@ -139,6 +139,19 @@ class PovListItem(BaseModel):
     decision_date: date | None = None
     # The customer account this PoV belongs to or turned into, when known.
     account_id: str | None = None
+    # Delphina's estimated investment in this PoV, in USD cents (see pov_rules.investment).
+    # None until the plan has kickoff and decision dates.
+    invest_minor: int | None = None
+
+
+class Investment(BaseModel):
+    """Delphina's planned team time on a PoV, as money. An estimate from the plan's length."""
+
+    days: int
+    se_hours: int
+    ae_hours: int
+    total_minor: int
+    currency: Literal["USD"]
 
 
 class PovConflict(BaseModel):

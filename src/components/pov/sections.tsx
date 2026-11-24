@@ -26,6 +26,7 @@ import {
   formatNumber,
   formatRange,
   moneyInput,
+  formatInvestment,
   parseMoney,
   planScore,
   plural,
@@ -151,7 +152,7 @@ function sum(points: PainPoint[]): { low: number; high: number } | null {
 }
 
 export function Summary({ plan }: { plan: PlanView }) {
-  const { pov, pain_points, criteria, milestones } = plan;
+  const { pov, pain_points, criteria, milestones, investment } = plan;
   const valued = pain_points.filter((p) => p.value_low_minor !== null && p.value_high_minor !== null);
   const unvalued = pain_points.length - valued.length;
   const total = sum(valued);
@@ -166,9 +167,9 @@ export function Summary({ plan }: { plan: PlanView }) {
   const length = daysBetween(kickoff, decision);
 
   return (
-    <div className="grid grid-cols-1 gap-px overflow-hidden rounded-md border border-zinc-200 bg-zinc-200 lg:grid-cols-[2fr_1fr_1fr] dark:border-zinc-800 dark:bg-zinc-800">
-      <div className={KPI_CELL}>
-        <span className={KPI_LABEL}>Value of solving these, per year</span>
+    <div className="grid grid-cols-1 gap-px overflow-hidden rounded-md border border-zinc-200 bg-zinc-200 lg:grid-cols-2 xl:grid-cols-[2fr_2fr_1fr_1fr] dark:border-zinc-800 dark:bg-zinc-800">
+      <div className={`${KPI_CELL} min-w-0`}>
+        <span className={KPI_LABEL}>Value to {pov.prospect_name}, per year</span>
         <span className={KPI_VALUE}>{range(total)}</span>
         <span className={`${KPI_FOOT} ${MUTED}`}>
           <span className="truncate">
@@ -177,7 +178,19 @@ export function Summary({ plan }: { plan: PlanView }) {
           {unvalued > 0 ? <Flag tone={`whitespace-nowrap ${WARN}`}>{unvalued} without a value</Flag> : null}
         </span>
       </div>
-      <div className={KPI_CELL}>
+      {/* The other half of the pair: what Delphina puts in. Same weight as its neighbour, no
+          colour, no hourly rate: it should read as commitment, not as an invoice. */}
+      <div className={`${KPI_CELL} min-w-0`}>
+        <span className={KPI_LABEL}>{pov.status === "decided" ? "Delphina invested" : "Delphina is investing"}</span>
+        <span className={KPI_VALUE}>{investment ? `about ${formatInvestment(investment.total_minor)}` : DASH}</span>
+        {/* Wraps instead of truncating: "at no charge to you" must always be readable. */}
+        <span className={`mt-1 block min-h-4 text-xs leading-4 ${MUTED}`}>
+          {investment
+            ? `Solution Engineer ${investment.se_hours} h · Account Executive ${investment.ae_hours} h · estimate, at no charge to you`
+            : "Estimated once the plan has kickoff and decision dates up to 60 days apart"}
+        </span>
+      </div>
+      <div className={`${KPI_CELL} min-w-0`}>
         <span className={KPI_LABEL}>Criteria weighting</span>
         <span className={KPI_VALUE}>{criteria.length === 0 ? DASH : `${weight} / 100`}</span>
         <span className={KPI_FOOT}>
@@ -192,7 +205,7 @@ export function Summary({ plan }: { plan: PlanView }) {
           )}
         </span>
       </div>
-      <div className={KPI_CELL}>
+      <div className={`${KPI_CELL} min-w-0`}>
         <span className={KPI_LABEL}>Kickoff to decision</span>
         <span className={KPI_VALUE}>{length === null ? DASH : plural(length, "day")}</span>
         <span className={`${KPI_FOOT} ${MUTED}`}>

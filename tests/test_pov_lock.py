@@ -359,7 +359,7 @@ def test_agreement_sql_is_gated_on_status_and_seq_and_logs_at_the_new_seq():
 
 def test_get_plan_returns_every_part_and_readiness():
     plan = get_plan(FakeLock(agreed=False), "p1", OWNER)
-    assert set(plan) == {"pov", "pain_points", "stakeholders", "criteria", "links", "milestones", "readiness"}
+    assert set(plan) == {"pov", "pain_points", "stakeholders", "criteria", "links", "milestones", "readiness", "investment"}
     assert plan["readiness"].passed == 5 and len(plan["criteria"]) == 2
     assert get_plan(FakeLock(), "nope", OWNER) is None
 

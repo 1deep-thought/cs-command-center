@@ -110,3 +110,12 @@ export function planScore(criteria: { weight_pct: number; score: number | null }
 export function suggestedDecision(score: number, go: number, noGo: number): "go" | "extend" | "no_go" {
   return score >= go ? "go" : score < noGo ? "no_go" : "extend";
 }
+
+/** Delphina's investment in whole US dollars: "$7,800". Not rounded further, so the rows of a
+ * list always add up to its total (the figures are whole hours x a round hourly value anyway).
+ * Shown with "about" wherever a prospect may see it: it is an estimate. */
+export function formatInvestment(minor: number | null | undefined): string {
+  if (typeof minor !== "number" || !Number.isFinite(minor)) return DASH;
+  const dollars = Math.round(minor / 100);
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(dollars);
+}

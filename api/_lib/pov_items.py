@@ -9,7 +9,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StringConstraints, model_validator
 
-from .pov_models import PovOwnerView, Readiness
+from .pov_models import Investment, PovOwnerView, Readiness
 
 Text120 = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
 Text300 = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)]
@@ -300,3 +300,6 @@ class PlanView(BaseModel):
     milestones: list[MilestoneView]
     links: list[CriterionLinkView]
     readiness: Readiness
+    # Not part of `pov` on purpose: it is derived, so it stays out of the lock snapshot and of
+    # conflict bodies.
+    investment: Investment | None = None

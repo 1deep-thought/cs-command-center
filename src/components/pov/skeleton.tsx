@@ -38,6 +38,9 @@ export function PovListSkeleton() {
               <Block className="h-3 w-20" />
             </td>
             <td className={CELL}>
+              <Block className="ml-auto h-3 w-14" />
+            </td>
+            <td className={CELL}>
               <Block className="ml-auto h-3 w-16" />
             </td>
           </tr>
@@ -81,9 +84,9 @@ export function PovPlanSkeleton() {
         </div>
         <Block className="mt-2.5 mb-1 h-3 w-80" />
       </div>
-      <div className="grid grid-cols-1 gap-px overflow-hidden rounded-md border border-zinc-200 bg-zinc-200 lg:grid-cols-[2fr_1fr_1fr] dark:border-zinc-800 dark:bg-zinc-800">
-        {[0, 1, 2].map((i) => (
-          <div key={i} className={KPI_CELL}>
+      <div className="grid grid-cols-1 gap-px overflow-hidden rounded-md border border-zinc-200 bg-zinc-200 lg:grid-cols-2 xl:grid-cols-[2fr_2fr_1fr_1fr] dark:border-zinc-800 dark:bg-zinc-800">
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} className={`${KPI_CELL} min-w-0`}>
             <Block className="h-4 w-28" />
             <Block className="mt-1 h-8 w-32" />
             <Block className="mt-1 h-4 w-40" />

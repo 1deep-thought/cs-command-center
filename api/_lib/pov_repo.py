@@ -20,7 +20,7 @@ from uuid import UUID
 from google.cloud import bigquery
 
 from .pov_bigquery import get_pov_client, pov_table
-from .pov_rules import ADMIN_FIELDS
+from .pov_rules import ADMIN_FIELDS, investment
 from .pov_models import PATCHABLE_FIELDS, PovCreate, PovListItem, PovOwnerView
 
 BUDGET_S = 8.0  # reads: one deadline for the whole request (every query + retry), under the 10s guardrail
@@ -54,6 +54,12 @@ FIELD_TYPES: dict[str, str] = {
     "no_go_threshold": "INT64",
 }
 assert set(FIELD_TYPES) == set(PATCHABLE_FIELDS)  # a new patchable field needs a column type
+
+
+def list_item(row: dict[str, Any]) -> PovListItem:
+    """A list row plus Delphina's estimated investment, worked out from the dates read with it."""
+    estimate = investment(row.pop("kickoff_date", None), row.get("decision_date"), row.pop("start_date", None), row.get("end_date"))
+    return PovListItem(**row, invest_minor=estimate["total_minor"] if estimate else None)  # type: ignore[arg-type]
 
 
 def _param(name: str, type_: str, value: Any) -> bigquery.ScalarQueryParameter:
@@ -134,13 +140,14 @@ class BigQueryPovRepo:
         # The decision date comes from the plan's decision milestone: one grouped subquery, joined on
         # the PoV id (both tables are small and clustered on pov_id).
         rows = self._run(
-            f"SELECT {LIST_COLUMNS}, d.decision_date FROM `{pov_table('pov')}` p "
-            f"LEFT JOIN (SELECT pov_id, MAX(due_date) AS decision_date FROM `{pov_table('milestone')}` "
-            "WHERE kind = 'decision' AND deleted_at IS NULL GROUP BY pov_id) d USING (pov_id) "
+            f"SELECT {LIST_COLUMNS}, start_date, d.decision_date, d.kickoff_date FROM `{pov_table('pov')}` p "
+            "LEFT JOIN (SELECT pov_id, MAX(IF(kind = 'decision', due_date, NULL)) AS decision_date, "
+            f"MIN(IF(kind = 'kickoff', due_date, NULL)) AS kickoff_date FROM `{pov_table('milestone')}` "
+            "WHERE kind IN ('kickoff', 'decision') AND deleted_at IS NULL GROUP BY pov_id) d USING (pov_id) "
             "WHERE p.deleted_at IS NULL ORDER BY updated_at DESC LIMIT 200",
             [],
         )
-        return [PovListItem(**dict(r.items())) for r in rows]
+        return [list_item(dict(r.items())) for r in rows]
 
     def op_applied(self, pov_id: str, op_id: UUID, item_kind: str | None = None, item_id: str | None = None) -> bool:
         """Was this operation already logged? With item_kind/item_id it must have been applied to that item,

@@ -75,6 +75,19 @@ export interface PovListItem {
   decision_date: string | null;
   /** The customer account this PoV belongs to or turned into, when known. */
   account_id: string | null;
+  /** Delphina's estimated investment in this PoV, in USD cents. Null until the plan has
+   * kickoff and decision dates. */
+  invest_minor: number | null;
+}
+
+/** Delphina's planned team time on a PoV, as money: weeks from kickoff to decision x standard
+ * weekly hours per role x one standard hourly value. An estimate, worked out on the server. */
+export interface Investment {
+  days: number;
+  se_hours: number;
+  ae_hours: number;
+  total_minor: number;
+  currency: "USD";
 }
 
 /** 422 from PATCH when the merged plan is invalid: `detail` is one of these codes. Pydantic

@@ -9,6 +9,14 @@ from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Final
 
+from .config import (
+    POV_AE_HOURS_PER_WEEK,
+    POV_HOURLY_VALUE_MINOR,
+    POV_INVESTMENT_CURRENCY,
+    POV_INVESTMENT_MAX_DAYS,
+    POV_SE_HOURS_PER_WEEK,
+)
+
 from .pov_milestone_rules import invalid_milestone_dates
 
 # Plan fields can be edited only until the plan locks.
@@ -39,6 +47,32 @@ def weighted_score(criteria: list[dict[str, object]]) -> float | None:
 def suggested_decision(score: float, go: int, no_go: int) -> str:
     """What the thresholds agreed at lock say. The owner still makes the call."""
     return "go" if score >= go else "no_go" if score < no_go else "extend"
+
+
+def investment(
+    kickoff: date | None, decision: date | None, start_date: date | None = None, end_date: date | None = None
+) -> dict[str, object] | None:
+    """Delphina's planned investment in a PoV: team time over the plan's length, as money.
+
+    Length is kickoff to decision (the milestones), else the plan's own start and end dates.
+    None when the plan has no usable dates yet, or they are further apart than a PoV runs. Integer arithmetic throughout, hours rounded
+    half up, so the list, the plan page and any total always agree."""
+    begin, end = (kickoff, decision) if kickoff and decision else (start_date, end_date)
+    if begin is None or end is None or end <= begin:
+        return None
+    days = (end - begin).days
+    if days > POV_INVESTMENT_MAX_DAYS:
+        return None  # not a plausible PoV length (a typo, or placeholder dates): no figure beats a wrong one
+    se_hours = (2 * days * POV_SE_HOURS_PER_WEEK + 7) // 14  # days / 7 x hours per week
+    ae_hours = (2 * days * POV_AE_HOURS_PER_WEEK + 7) // 14
+    return {
+        "days": days,
+        "se_hours": se_hours,
+        "ae_hours": ae_hours,
+        # The hourly value itself is deliberately not sent: the page shows hours and a total.
+        "total_minor": (se_hours + ae_hours) * POV_HOURLY_VALUE_MINOR,
+        "currency": POV_INVESTMENT_CURRENCY,
+    }
 
 
 def plan_is_editable(status: str) -> bool:

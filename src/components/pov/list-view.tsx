@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState, type ReactNode } from "react";
 import { CELL, ROW, TABLE_FRAME } from "@/components/renewals/layout";
 import type { PovListItem } from "@/types/pov";
-import { formatDate, localPart } from "./format";
+import { formatDate, formatInvestment, localPart, plural } from "./format";
 import { MUTED, POV_TABLE, SEG, SEG_ACTIVE, SEG_WRAP, TAB, TAB_ACTIVE, TABS, TH, listColumns, type ListColumn } from "./layout";
 import { StatusBadge } from "./status-badge";
 
@@ -66,6 +66,11 @@ export function PovListView({ povs, viewer }: { povs: PovListItem[]; viewer: str
     .filter((p) => who === "everyone" || p.owner_email.trim().toLowerCase() === viewer)
     .sort((a, b) => order(tab, a, b));
   const [emptyTitle, emptyHint] = emptyText(tab, who);
+  // One line above the table: what Delphina has riding on the plans shown.
+  const estimated = rows.filter((p) => p.invest_minor != null);
+  const invested = estimated.reduce((t, p) => t + (p.invest_minor ?? 0), 0);
+  const missing = rows.length - estimated.length;
+  const noun = tab === "active" ? "active PoV" : tab === "decided" ? "decided PoV" : "PoV";
 
   return (
     <>
@@ -77,8 +82,15 @@ export function PovListView({ povs, viewer }: { povs: PovListItem[]; viewer: str
             </button>
           ))}
         </div>
+        {rows.length > 0 ? (
+          <p className={`mb-1.5 ml-auto hidden min-w-0 truncate text-xs tabular-nums sm:block ${MUTED}`}>
+            {plural(rows.length, noun)}
+            {estimated.length > 0 ? ` · Delphina ${tab === "decided" ? "invested" : "investing"} about ${formatInvestment(invested)}` : ""}
+            {missing > 0 ? ` · ${missing} not estimated yet` : ""}
+          </p>
+        ) : null}
         {viewer ? (
-          <div role="group" aria-label="Whose plans to show" className={`${SEG_WRAP} mb-1 ml-auto`}>
+          <div role="group" aria-label="Whose plans to show" className={`${SEG_WRAP} mb-1 shrink-0 ${rows.length > 0 ? "ml-auto sm:ml-4" : "ml-auto"}`}>
             {(["mine", "everyone"] as const).map((w) => (
               <button key={w} type="button" aria-pressed={who === w} onClick={() => setWho(w)} className={who === w ? SEG_ACTIVE : SEG}>
                 {w === "mine" ? "Mine" : "Everyone"}
@@ -116,6 +128,9 @@ export function PovListView({ povs, viewer }: { povs: PovListItem[]; viewer: str
                   {localPart(pov.owner_email)}
                 </td>
               ) : null}
+              <td className={`${CELL} text-right tabular-nums`}>
+                {pov.invest_minor == null ? <span className={MUTED}>Not estimated</span> : formatInvestment(pov.invest_minor)}
+              </td>
               <td className={`${CELL} text-right tabular-nums ${MUTED}`}>{formatDate(pov.updated_at)}</td>
             </tr>
           ))

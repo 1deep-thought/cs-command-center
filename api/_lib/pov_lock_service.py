@@ -19,6 +19,7 @@ from .pov_rules import (
     DEFAULT_NO_GO,
     TRANSITIONS,
     allowed_transitions,
+    investment,
     readiness,
     suggested_decision,
     weighted_score,
@@ -107,7 +108,10 @@ def get_plan(repo: LockRepo, pov_id: str, actor: str) -> dict[str, object] | Non
     if pov is None:
         return None
     parts = repo.plan_parts(pov_id)
-    return {"pov": pov, **_rows(parts), "readiness": _readiness(pov, parts, actor)}
+    rows = _rows(parts)
+    due = {m.get("kind"): m.get("due_date") for m in rows["milestones"]}
+    estimate = investment(due.get("kickoff"), due.get("decision"), pov.start_date, pov.end_date)  # type: ignore[arg-type]
+    return {"pov": pov, **rows, "readiness": _readiness(pov, parts, actor), "investment": estimate}
 
 
 def _dumps(value: object) -> str:

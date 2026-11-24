@@ -37,3 +37,16 @@ WEIGHTS: Final[dict[HealthComponent, int]] = {
 
 MIN_AVAILABLE_WEIGHT: Final = 60
 EXEC_CALL_ARR_THRESHOLD_USD: Final = 100_000
+
+
+# ---- Proof of Value: what a PoV costs Delphina in team time -----------------------------------
+# An estimate from the plan's length, not logged time: weeks from kickoff to decision x standard
+# weekly hours per role x one standard hourly value. The hourly figure is a standard value of
+# team time (safe to show a prospect), not anyone's salary. Changing a number here re-prices
+# every PoV, decided ones included: bump the version string when you do.
+POV_INVESTMENT_CONFIG_VERSION: Final = "2026-11-23.v1"
+POV_SE_HOURS_PER_WEEK: Final = 10  # Solution Engineer
+POV_AE_HOURS_PER_WEEK: Final = 3  # Account Executive
+POV_HOURLY_VALUE_MINOR: Final = 150_00  # USD cents per hour, both roles
+POV_INVESTMENT_CURRENCY: Final = "USD"
+POV_INVESTMENT_MAX_DAYS: Final = 60  # the longest kickoff-to-decision a plan may lock with

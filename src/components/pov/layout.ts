@@ -77,9 +77,11 @@ export type ListColumn = { label: string; width?: number; align: string };
 export function listColumns(showOwner: boolean): ListColumn[] {
   return [
     { label: "PoV", align: "text-left" },
-    { label: "Status", width: 150, align: "text-left" },
-    { label: "Decision by", width: 140, align: "text-left" },
-    ...(showOwner ? [{ label: "Owner", width: 200, align: "text-left" }] : []),
-    { label: "Updated", width: 130, align: "text-right" },
+    { label: "Status", width: 140, align: "text-left" },
+    { label: "Decision by", width: 120, align: "text-left" },
+    ...(showOwner ? [{ label: "Owner", width: 140, align: "text-left" }] : []),
+    // Delphina's estimated team time on the PoV, as money. Staff-facing: the list is not for sharing.
+    { label: "Delphina investment", width: 140, align: "text-right" },
+    { label: "Updated", width: 110, align: "text-right" },
   ];
 }
