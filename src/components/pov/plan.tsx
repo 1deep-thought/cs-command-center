@@ -13,15 +13,14 @@ import type { AccountOption } from "./plan-details";
 export async function PovPlan({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   let plan: PlanView | null;
-  let accounts: AccountOption[] | null;
+  // Accounts only feed the "Customer account" picker and the account's name in the header, so
+  // the plan never waits for them: the promise is handed to the page and streams in when ready.
+  // It never rejects (null = the account data couldn't be read).
+  const accounts: Promise<AccountOption[] | null> = getAccountBook()
+    .then((book) => book.accounts.map(({ account_id, account_name }) => ({ account_id, account_name })))
+    .catch(() => null);
   try {
-    // Accounts only feed the "Customer account" picker: the plan must open without them.
-    [plan, accounts] = await Promise.all([
-      getPlan(id),
-      getAccountBook()
-        .then((book) => book.accounts.map(({ account_id, account_name }) => ({ account_id, account_name })))
-        .catch(() => null),
-    ]);
+    plan = await getPlan(id);
   } catch (error) {
     if (error instanceof AuthRequiredError) return <SignInCard expired={error.expired} />;
     if (error instanceof NotAuthorizedError) return <NoAccessCard />;

@@ -79,7 +79,8 @@ export interface PovListItem {
 
 /** 422 from PATCH when the merged plan is invalid: `detail` is one of these codes. Pydantic
  * validation errors (malformed bodies) come back as FastAPI's standard list in `detail`. */
-export type PovPatchRuleError = "invalid_dates" | "invalid_thresholds";
+export type PovPatchRuleError = "invalid_dates" | "invalid_thresholds" | "owner_not_staff";
+/** 403 from PATCH: `detail` is "owner_only" when someone other than the owner or an admin sends a new owner_email. */
 
 /** 409 body from PATCH /api/py/pov/{id}. */
 export interface PovConflict {
@@ -92,7 +93,7 @@ export interface PovConflict {
 
 // ---- readiness and transitions (GET /{id}/readiness, POST /{id}/transitions)
 
-export type TransitionTarget = "collaborating" | "locked";
+export type TransitionTarget = "collaborating" | "locked" | "decided";
 export type ReadinessKey = "pain_points" | "stakeholders" | "criteria" | "links" | "dates" | "sponsor_agreed";
 
 /** Codes the server sends today; render unknown codes generically so a new one never breaks the page. */
@@ -142,6 +143,10 @@ export interface TransitionIn {
   /** Only with to: "locked". Omitted: keep what the plan has, else 80 and 60. Go must be above No-go. */
   go_threshold?: number | null;
   no_go_threshold?: number | null;
+  /** Required with to: "decided" (owner, locked plan, every criterion scored; else 422 "results_missing"). */
+  decision?: PovDecision;
+  /** Only with to: "decided". Kept in the change log next to the score. */
+  note?: string;
 }
 
 /** POST /{id}/sponsor-agreement: the owner records that the Sponsor agreed to the plan as it stands

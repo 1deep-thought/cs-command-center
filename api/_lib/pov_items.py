@@ -194,6 +194,11 @@ class CriterionPatch(Strict):
     weight_pct: Annotated[int, Field(ge=0, le=100)] | None = None
     scorer_id: Annotated[str, StringConstraints(min_length=1, max_length=64)] | None = None
     evidence_source: EvidenceSource | None = None
+    # Results. Only once the plan is locked, and never in the same request as the fields above.
+    # `score` is how far the criterion was met, 0 to 100 (the page offers Not met 0, Partly 50, Met 100).
+    result_value: Annotated[float, Field(ge=-1e12, le=1e12)] | None = None
+    score: Annotated[int, Field(ge=0, le=100)] | None = None
+    measurement_ref: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)] | None = None
 
     @model_validator(mode="after")
     def _check(self) -> CriterionPatch:
@@ -218,6 +223,9 @@ class CriterionView(_ItemView):
     weight_pct: int
     scorer_id: str | None
     evidence_source: EvidenceSource | None
+    result_value: float | None = None
+    score: float | None = None
+    measurement_ref: str | None = None
 
 
 # ------------------------------------------------------------------ milestones

@@ -7,7 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from api._lib.pov_models import PovCreate, PovListItem, PovOwnerView, PovPatch
-from api._lib.pov_rules import invalid_changes, plan_is_editable
+from api._lib.pov_rules import ADMIN_FIELDS, invalid_changes, plan_is_editable
 from api._lib.pov_service import create_pov, patch_pov
 
 NOW = datetime(2026, 11, 22, tzinfo=timezone.utc)
@@ -50,7 +50,12 @@ class FakeRepo:
         if row.version != base_version:
             return False
         self.rows[pov_id] = row.model_copy(
-            update={**changes, "version": row.version + 1, "seq": row.seq + 1, "updated_by": actor}
+            update={
+                **changes,
+                "version": row.version + 1,
+                "seq": row.seq + (0 if set(changes) <= ADMIN_FIELDS else 1),  # as build_patch_script does
+                "updated_by": actor,
+            }
         )
         self.ops.add((pov_id, op_id))
         return True
@@ -224,3 +229,28 @@ def test_owner_cannot_be_cleared():
         PovPatch(base_version=1, op_id=uuid4(), owner_email=None)
     with pytest.raises(ValidationError):
         PovPatch(base_version=1, op_id=uuid4(), owner_email="not-an-email")
+
+
+def test_account_link_and_handover_do_not_count_as_plan_changes(repo, pov):
+    # seq is what a recorded Sponsor agreement is checked against: these must not move it.
+    r = patch_pov(repo, pov.pov_id, patch(account_id="acct_1"), "a@delphina.example")
+    assert (r.pov.seq, r.pov.version) == (1, 2)
+    r = patch_pov(repo, pov.pov_id, patch(base_version=2, owner_email="b@delphina.example"), "a@delphina.example", is_staff=is_staff)
+    assert (r.pov.seq, r.pov.version) == (1, 3)
+    r = patch_pov(repo, pov.pov_id, patch(base_version=3, account_id="acct_2", title="Renamed"), "a@delphina.example")
+    assert (r.pov.seq, r.pov.version) == (2, 4)
+
+
+def test_non_owner_cannot_slip_a_handover_in_with_another_field(repo, pov):
+    p = patch(title="Renamed", owner_email="b@delphina.example")
+    assert patch_pov(repo, pov.pov_id, p, "b@delphina.example", is_staff=is_staff).kind == "forbidden"
+    assert repo.rows[pov.pov_id].title == "Acme PoV" and repo.rows[pov.pov_id].version == 1
+    # Replaying the refused operation writes nothing either.
+    assert patch_pov(repo, pov.pov_id, p, "b@delphina.example", is_staff=is_staff).kind == "forbidden"
+    assert repo.rows[pov.pov_id].owner_email == "a@delphina.example"
+
+
+def test_locked_plan_stays_frozen_when_the_unchanged_owner_rides_along(repo, pov):
+    repo.rows[pov.pov_id] = pov.model_copy(update={"status": "locked"})
+    p = patch(title="Nope", owner_email="a@delphina.example")
+    assert patch_pov(repo, pov.pov_id, p, "a@delphina.example", is_staff=is_staff).kind == "frozen"

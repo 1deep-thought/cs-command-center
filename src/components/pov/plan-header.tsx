@@ -3,18 +3,21 @@
 import Link from "next/link";
 import { useId, useRef, useState, type ReactNode } from "react";
 import { HEADER_ROW } from "@/components/renewals/layout";
-import type { PovOwnerView, Readiness, ReadinessProblem } from "@/types/pov";
-import { CHECK_LABEL, DECISION_LABEL, DECISION_TEXT, PROBLEM_FALLBACK, PROBLEM_TEXT, STATUS_LABEL, STATUS_ORDER } from "./labels";
+import type { PovDecision, PovOwnerView, Readiness, ReadinessProblem } from "@/types/pov";
+import { planScore, suggestedDecision } from "./format";
+import { CHECK_LABEL, DECISION_BADGE, DECISION_LABEL, DECISION_TEXT, PROBLEM_FALLBACK, PROBLEM_TEXT, STATUS_LABEL, STATUS_ORDER } from "./labels";
 import { PlanDetails, type AccountOption } from "./plan-details";
 import { BAD, BUTTON, INPUT, LINK, MUTED, PILL, PRIMARY, STEPPER, STICKY_HEAD, TONE_GOOD, TONE_WARN, WARN, rowId } from "./layout";
 
-type Action = "start" | "agree" | "lock";
+type Action = "start" | "agree" | "lock" | "decide";
+const DECISIONS: readonly PovDecision[] = ["go", "extend", "no_go"];
 type Notice = { text: string; tone: "bad" | "info"; recheck?: boolean };
 
 const ACTION_LABEL: Record<Action, [idle: string, busy: string]> = {
   start: ["Start collaborating", "Starting…"],
   agree: ["Sponsor has agreed", "Recording…"],
   lock: ["Lock plan", "Locking…"],
+  decide: ["Record decision", "Recording…"],
 };
 const SLOW_AFTER_MS = 4000;
 
@@ -36,6 +39,7 @@ export function PlanHeader({
   stale,
   saving,
   accounts,
+  criteria,
   onChanged,
   onDetails,
   onAuthNeeded,
@@ -49,8 +53,10 @@ export function PlanHeader({
   stale: boolean;
   /** How many changes are waiting to be saved. */
   saving: number;
-  /** Customer accounts for the account picker, or null when they couldn't be read. */
-  accounts: AccountOption[] | null;
+  /** Customer accounts for the account picker: undefined while loading, null when they couldn't be read. */
+  accounts: AccountOption[] | null | undefined;
+  /** The plan's criteria: their results give the score a decision is recorded against. */
+  criteria: { weight_pct: number; score: number | null }[];
   /** Save a change to the plan's own details (title, prospect, account, owner). */
   onDetails: (changes: Record<string, unknown>) => void;
   /** A request found the session expired: the page shows sign-in in place. */
@@ -74,7 +80,19 @@ export function PlanHeader({
   const [go, setGo] = useState(String(pov.go_threshold ?? 80));
   const [noGo, setNoGo] = useState(String(pov.no_go_threshold ?? 60));
   const [settling, setSettling] = useState(false);
+  const [deciding, setDeciding] = useState(false);
+  const [note, setNote] = useState("");
+  const { score, missing } = planScore(criteria);
+  const suggested =
+    score === null || pov.go_threshold === null || pov.no_go_threshold === null
+      ? null
+      : suggestedDecision(score, pov.go_threshold, pov.no_go_threshold);
   const [details, setDetails] = useState(false);
+  const detailsRef = useRef<HTMLButtonElement>(null);
+  const closeDetails = () => {
+    setDetails(false);
+    detailsRef.current?.focus(); // the form unmounts: put focus back where it came from
+  };
   const accountName = pov.account_id ? accounts?.find((a) => a.account_id === pov.account_id)?.account_name : undefined;
 
   const frozen = pov.status === "locked" || pov.status === "decided";
@@ -90,7 +108,9 @@ export function PlanHeader({
         ? othersPass && !readiness.ready
           ? "agree"
           : "lock"
-        : null;
+        : pov.status === "locked"
+          ? "decide"
+          : null;
   const pending = busy !== null || settling || stale;
 
   function refresh() {
@@ -111,8 +131,9 @@ export function PlanHeader({
     refresh();
   }
 
-  async function run(which: Action) {
+  async function run(which: Action, decision?: PovDecision) {
     if (pending) return;
+    if (which === "decide" && !decision) return;
     if (which === "lock" && !readiness.ready) {
       setOpen(true); // not ready: show what is missing instead of sending a request that will be refused
       return;
@@ -136,7 +157,9 @@ export function PlanHeader({
         ? ["sponsor-agreement", { op_id: opId }]
         : which === "start"
           ? ["transitions", { to: "collaborating", op_id: opId }]
-          : ["transitions", { to: "locked", op_id: opId, go_threshold: goValue, no_go_threshold: noGoValue }];
+          : which === "decide"
+            ? ["transitions", { to: "decided", op_id: opId, decision, ...(note.trim() ? { note: note.trim().slice(0, 500) } : {}) }]
+            : ["transitions", { to: "locked", op_id: opId, go_threshold: goValue, no_go_threshold: noGoValue }];
     try {
       const res = await fetch(`/api/pov/${pov.pov_id}/${path}`, {
         method: "POST",
@@ -147,7 +170,15 @@ export function PlanHeader({
       if (res.ok) {
         if (which === "agree" && data) setReadiness(data as unknown as Readiness);
         setConfirmLock(false);
+        setDeciding(false);
+        if (which === "decide" && decision === "go" && !pov.account_id) {
+          setNotice({ text: "Decision recorded. Once this prospect is a customer, link the account under Edit details.", tone: "info" });
+        }
         refresh();
+      } else if (res.status === 422 && data?.detail === "results_missing") {
+        setNotice({ text: "Every criterion needs a result before the decision is recorded.", tone: "bad" });
+      } else if (res.status === 409 && data?.code === "version_conflict" && which === "decide") {
+        setNotice({ text: "A result changed while you were deciding. Check the score, then record the decision again.", tone: "bad", recheck: true });
       } else if (res.status === 422 && data?.detail === "not_ready" && data.readiness) {
         const latest = data.readiness as Readiness;
         setReadiness(latest);
@@ -155,7 +186,7 @@ export function PlanHeader({
         setConfirmLock(false);
         const count = latest.checks.reduce((n, c) => n + c.problems.length, 0);
         setNotice({ text: `Not ready yet: ${count} to fix before lock.`, tone: "bad" });
-      } else if (res.status === 422) {
+      } else if (res.status === 422 && which === "lock") {
         setNotice({ text: "Go must be higher than No-go.", tone: "bad" });
       } else if (res.status === 409 && data?.code === "version_conflict") {
         setNotice({ text: "The plan changed while you were working.", tone: "bad", recheck: true });
@@ -208,6 +239,7 @@ export function PlanHeader({
             </a>
           ) : null}
           <button
+            ref={detailsRef}
             type="button"
             aria-expanded={details}
             onClick={() => setDetails((v) => !v)}
@@ -269,6 +301,51 @@ export function PlanHeader({
                 {pending ? ACTION_LABEL.lock[1] : "Lock: no edits after this"}
               </button>
             </>
+          ) : action === "decide" && deciding ? (
+            <>
+              <input
+                aria-label="Note on the decision (optional)"
+                placeholder="Note (optional)"
+                value={note}
+                maxLength={500}
+                onChange={(e) => setNote(e.target.value)}
+                className={`${INPUT} w-56`}
+              />
+              <span role="group" aria-label="Decision" className="inline-flex items-center gap-2">
+                {DECISIONS.map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    disabled={pending}
+                    onClick={() => run("decide", d)}
+                    className={`${PILL} ${DECISION_BADGE[d]} ${pending ? "opacity-60" : ""} ${d === suggested ? "ring-2 ring-zinc-400 dark:ring-zinc-500" : ""}`}
+                  >
+                    {DECISION_LABEL[d]}
+                    {d === suggested ? <span className="font-normal opacity-80">· score points here</span> : null}
+                  </button>
+                ))}
+              </span>
+              <button type="button" disabled={pending} onClick={() => setDeciding(false)} className={BUTTON}>
+                Cancel
+              </button>
+            </>
+          ) : action === "decide" ? (
+            <>
+              {missing > 0 ? (
+                <span className={`text-xs tabular-nums ${MUTED}`}>
+                  {missing} {missing === 1 ? "criterion needs" : "criteria need"} a result first
+                </span>
+              ) : null}
+              <button
+                type="button"
+                disabled={pending || missing > 0 || criteria.length === 0}
+                aria-busy={pending}
+                onClick={() => setDeciding(true)}
+                className={`${PRIMARY} ${pending ? "animate-pulse" : ""}`}
+              >
+                {ACTION_LABEL.decide[pending && busy === "decide" ? 1 : 0]}
+              </button>
+            </>
           ) : action ? (
             <button
               type="button"
@@ -328,7 +405,7 @@ export function PlanHeader({
       ) : null}
       {children}
       {details ? (
-        <PlanDetails pov={pov} accounts={accounts} frozen={frozen} onSave={onDetails} onClose={() => setDetails(false)} />
+        <PlanDetails pov={pov} accounts={accounts} frozen={frozen} onSave={onDetails} onClose={closeDetails} />
       ) : null}
       {action === "agree" && !notice && !stale ? (
         <p className={`mt-1.5 text-right text-xs ${MUTED}`}>

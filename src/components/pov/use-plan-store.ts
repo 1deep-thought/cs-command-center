@@ -33,6 +33,7 @@ type Op = {
   changes?: Fields; // patch payload (merged)
   local?: Fields; // the same edit as view fields
   inFlight?: boolean;
+  retried?: boolean;
 };
 
 export interface Editor {
@@ -55,11 +56,13 @@ const RULE_TEXT: Record<string, string> = {
   invalid_exercise_length: "Kickoff to decision must be 14 to 60 days.",
   invalid_value_range: "A value needs both a low and a high figure, with high at least as large as low.",
   verification_needs_value_and_basis: "To verify a value, give it a range and say what it is based on.",
+  results_need_locked_plan: "Results are entered once the plan is locked.",
+  results_separately: "Results are saved on their own, not together with changes to the plan.",
   owner_not_staff: "That person doesn't have access to CS Command Center yet, so they can't own a plan.",
 };
 const CONFLICT_TEXT: Record<string, string> = {
   version_conflict: "someone else changed it first. Their version is shown now.",
-  plan_frozen: "the plan is locked.",
+  plan_frozen: "that part of the plan can no longer be changed.",
   owner_only: "only the plan's owner or an admin can hand it over.",
   limit_reached: "this plan already has the maximum number.",
   duplicate_kind: "that date is already set.",
@@ -177,6 +180,18 @@ export function usePlanStore(initial: PlanView) {
           op.inFlight = false;
           needAuth();
           break;
+        } else if (res.status === 409 && op.key === "patch:pov" && !op.retried) {
+          // The plan's own version also moves when it changes status (Start, Lock), and those
+          // requests don't go through this queue. Take the version the server reports and send
+          // the details once more; a second refusal is reported like any other.
+          const body = (await res.json().catch(() => null)) as { code?: string; current?: { version?: number } } | null;
+          if (body?.code === "version_conflict" && typeof body.current?.version === "number") {
+            povVersion.current = body.current.version;
+            op.retried = true;
+            op.inFlight = false;
+            continue;
+          }
+          failure = (body?.code && CONFLICT_TEXT[body.code]) || "it conflicts with the saved plan.";
         } else {
           failure = await refusal(res);
         }

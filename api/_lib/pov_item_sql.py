@@ -1,7 +1,8 @@
 """Pure SQL builder for child-item writes (no BigQuery imports, so it unit-tests anywhere).
 
 One script = one transaction:
-  1. bump the PoV's change counter (also the gate: the plan must be in draft/collaborating),
+  1. bump the PoV's change counter (also the gate: the plan must be in one of `statuses`,
+     draft/collaborating unless the caller says otherwise),
   2. apply the child statement with its version check, count limit or soft delete,
   3. write ONE change-log row stamped with the new counter value,
   4. commit only if everything applied.
@@ -26,6 +27,8 @@ LOG_COLUMNS = (
     "pov_id, seq, op_id, actor, actor_kind, item_kind, item_id, field, old_value, new_value, visibility, changed_at"
 )
 NO_LIMIT = 1_000_000
+EDITABLE = ("draft", "collaborating")
+KNOWN_STATUSES = frozenset({"draft", "collaborating", "locked", "decided"})
 
 
 @dataclass(frozen=True)
@@ -52,7 +55,12 @@ def build_write_script(
     base_version: int | None = None,
     cascade_tables: dict[str, str] | None = None,
     expected_seq: int | None = None,
+    statuses: tuple[str, ...] = EDITABLE,
 ) -> tuple[str, list[Param]]:
+    """`statuses`: the plan statuses this write is allowed in (from code, never from a request)."""
+    if not statuses or not set(statuses) <= KNOWN_STATUSES:
+        raise ValueError(f"unknown statuses: {statuses}")
+    status_list = ", ".join(f"'{s}'" for s in statuses)
     fields = sorted(values)
     unknown = set(fields) - set(spec.fields)
     if unknown:
@@ -147,14 +155,14 @@ def build_write_script(
         seq_gate = " AND seq = @expected_seq"
         stale_branch = (
             f"ELSEIF EXISTS (SELECT 1 FROM `{pov_table}` WHERE pov_id = @pov_id "
-            "AND status IN ('draft', 'collaborating') AND deleted_at IS NULL) THEN\n  SET result = 2;\n"
+            f"AND status IN ({status_list}) AND deleted_at IS NULL) THEN\n  SET result = 2;\n"
         )
 
     sql = f"""
 DECLARE result INT64 DEFAULT 0;
 BEGIN TRANSACTION;
 UPDATE `{pov_table}` SET seq = seq + 1, updated_by = @actor, updated_at = CURRENT_TIMESTAMP()
-  WHERE pov_id = @pov_id AND status IN ('draft', 'collaborating') AND deleted_at IS NULL{seq_gate};
+  WHERE pov_id = @pov_id AND status IN ({status_list}) AND deleted_at IS NULL{seq_gate};
 IF @@row_count = 1 THEN
   {child}
   IF @@row_count = 1 THEN

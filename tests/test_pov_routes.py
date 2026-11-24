@@ -107,3 +107,19 @@ def test_handover_needs_owner_and_a_person_with_access(client):
     # No longer the owner, and not an admin: cannot take it back.
     r = c.patch(url, json={"base_version": 2, "op_id": str(uuid4()), "owner_email": "a@delphina.example"})
     assert r.status_code == 403 and r.json()["detail"] == "owner_only"
+
+
+def test_admin_hands_over_and_account_links_on_a_locked_plan(client):
+    from api.pov_routes import get_staff_check
+
+    c, repo = client
+    app.dependency_overrides[get_staff_check] = lambda: (lambda email: True)
+    pov = create(c).json()
+    url = f"/api/py/pov/{pov['pov_id']}"
+    repo.rows[pov["pov_id"]] = repo.rows[pov["pov_id"]].model_copy(update={"status": "locked", "owner_email": "z@delphina.example"})
+    r = c.patch(url, json={"base_version": 1, "op_id": str(uuid4()), "account_id": "acct_42"})
+    assert r.status_code == 200 and r.json()["account_id"] == "acct_42" and r.json()["seq"] == pov["seq"]
+    assert c.patch(url, json={"base_version": 2, "op_id": str(uuid4()), "title": "x"}).status_code == 409
+    app.dependency_overrides[require_delphina] = lambda: Principal(email="boss@delphina.example", is_admin=True)
+    r = c.patch(url, json={"base_version": 2, "op_id": str(uuid4()), "owner_email": "b@delphina.example"})
+    assert r.status_code == 200 and r.json()["owner_email"] == "b@delphina.example"

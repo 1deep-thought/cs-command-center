@@ -12,7 +12,7 @@ from api._lib.pov_items import PlanView
 from api._lib.pov_lock_service import get_plan, get_readiness, record_sponsor_agreement, transition
 from api._lib.pov_lock_sql import build_agreement_script, build_transition_script
 from api._lib.pov_models import TransitionIn
-from api._lib.pov_rules import READINESS_KEYS, allowed_transitions, readiness
+from api._lib.pov_rules import READINESS_KEYS, allowed_transitions, readiness, suggested_decision, weighted_score
 from tests.test_pov_items import pov
 
 D = date.fromisoformat
@@ -135,7 +135,9 @@ def test_only_the_owner_moves_a_plan_and_locking_needs_readiness():
     assert allowed_transitions("draft", is_owner=False, ready=True) == []
     assert allowed_transitions("collaborating", is_owner=True, ready=False) == []
     assert allowed_transitions("collaborating", is_owner=True, ready=True) == ["locked"]
-    assert allowed_transitions("locked", is_owner=True, ready=True) == []
+    assert allowed_transitions("locked", is_owner=True, ready=True) == ["decided"]
+    assert allowed_transitions("locked", is_owner=False, ready=True) == []
+    assert allowed_transitions("decided", is_owner=True, ready=True) == []
 
 
 # ------------------------------------------------------------------ service
@@ -161,6 +163,8 @@ class FakeLock:
             return 2
         self.writes.append({"target": target, "old": old, "new": new, "expected_seq": expected_seq, **locking})
         update = {"status": target, "seq": self.pov.seq + 1, "version": self.pov.version + 1}
+        if target == "decided":
+            update.update(decision=locking["decision"])
         if target == "locked":
             update.update(
                 go_threshold=locking["go_threshold"], no_go_threshold=locking["no_go_threshold"],
@@ -381,3 +385,90 @@ def test_plan_view_accepts_rows_shaped_like_the_tables():
     )
     dumped = view.model_dump(mode="json")
     assert dumped["criteria"][0]["target_value"] == 2.5 and dumped["milestones"][0]["due_date"] == "2027-01-04"
+
+
+# ------------------------------------------------------------------ results and the decision
+
+
+def scored_parts(*scores):
+    parts = ready_parts()
+    for criterion, score in zip(parts["criteria"], scores):
+        criterion["score"] = score
+    return parts
+
+
+def test_weighted_score_needs_every_criterion_scored():
+    assert weighted_score(ready_parts()["criteria"]) is None
+    assert weighted_score(scored_parts(100, None)["criteria"]) is None
+    assert weighted_score(scored_parts(100, Decimal("50"))["criteria"]) == 80.0  # 60 x 1.0 + 40 x 0.5
+    assert weighted_score(scored_parts(0, 0)["criteria"]) == 0.0
+    assert weighted_score([]) is None
+    # Half-way cases round up, the same as planScore on the page (25 x 85 + 75 x 100 = 96.25).
+    parts = scored_parts(85, 100)
+    parts["criteria"][0]["weight_pct"], parts["criteria"][1]["weight_pct"] = 25, 75
+    assert weighted_score(parts["criteria"]) == 96.3
+
+
+def test_thresholds_suggest_go_extend_or_no_go():
+    assert suggested_decision(80, 80, 60) == "go"
+    assert suggested_decision(79.9, 80, 60) == "extend"
+    assert suggested_decision(60, 80, 60) == "extend"
+    assert suggested_decision(59.9, 80, 60) == "no_go"
+
+
+def test_deciding_needs_a_result_for_every_criterion():
+    repo = FakeLock("locked", parts=scored_parts(100, None))
+    r = move(repo, "decided", decision="go")
+    assert (r.kind, r.code) == ("invalid", "results_missing") and repo.writes == []
+
+
+def test_owner_records_the_decision_with_the_score_in_the_log():
+    repo = FakeLock("locked", parts=scored_parts(100, 50))
+    repo.pov = repo.pov.model_copy(update={"go_threshold": 80, "no_go_threshold": 60})
+    r = move(repo, "decided", decision="extend", note="Sponsor wants two more weeks")
+    assert r.kind == "applied" and (r.pov.status, r.pov.decision) == ("decided", "extend")
+    write = repo.writes[-1]
+    assert write["expected_seq"] == 5 and write["decision"] == "extend"
+    assert write["new"] == {
+        "status": "decided", "decision": "extend", "score": 80.0, "suggested": "go",
+        "note": "Sponsor wants two more weeks",
+    }
+    # Asking again for the same decision is a success and writes nothing (a second click, or a retry)...
+    assert move(repo, "decided", decision="extend").kind == "applied" and len(repo.writes) == 1
+    # ...but a different one is refused, never reported as saved.
+    again = move(repo, "decided", decision="go")
+    assert again.kind == "invalid_transition" and again.pov.decision == "extend" and len(repo.writes) == 1
+
+
+def test_deciding_is_for_the_owner_of_a_locked_plan_only():
+    assert move(FakeLock("locked", parts=scored_parts(100, 100)), "decided", actor="x@x", decision="go").kind == "forbidden"
+    assert move(FakeLock("collaborating", parts=scored_parts(100, 100)), "decided", decision="go").kind == "invalid_transition"
+
+
+def test_a_result_changed_while_deciding_is_a_conflict():
+    repo = FakeLock("locked", parts=scored_parts(100, 100))
+    repo.edit_before_write = True
+    assert move(repo, "decided", decision="go").kind == "conflict"
+
+
+def test_decision_fields_belong_to_deciding_only():
+    with pytest.raises(ValidationError):
+        TransitionIn(to="decided", op_id=uuid4())
+    with pytest.raises(ValidationError):
+        TransitionIn(to="decided", op_id=uuid4(), decision="maybe")
+    with pytest.raises(ValidationError):
+        TransitionIn(to="locked", op_id=uuid4(), decision="go")
+    with pytest.raises(ValidationError):
+        TransitionIn(to="collaborating", op_id=uuid4(), note="x")
+
+
+def test_decide_sql_sets_the_decision_and_is_gated_on_the_seq_it_read():
+    common = dict(pov_table="p.d.pov", revision_table="p.d.rev", log_table="p.d.log", pov_id="p1",
+                  from_status="locked", actor="a", op_id="o", old_json="{}", new_json="{}")
+    sql, params = build_transition_script("decided", expected_seq=7, decision="no_go", **common)
+    assert "decision = @decision" in sql and "AND seq = @expected_seq" in sql and "p.d.rev" not in sql
+    assert {p.name: p.value for p in params}["decision"] == "no_go"
+    with pytest.raises(ValueError):
+        build_transition_script("decided", expected_seq=7, decision="go; DROP", **common)
+    with pytest.raises(ValueError):
+        build_transition_script("decided", decision="go", **common)

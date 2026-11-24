@@ -27,9 +27,11 @@ import {
   formatRange,
   moneyInput,
   parseMoney,
+  planScore,
   plural,
+  suggestedDecision,
 } from "./format";
-import { EVIDENCE_LABEL, MILESTONE_LABEL, ROLE_LABEL, SOLVE_LABEL } from "./labels";
+import { DECISION_LABEL, DECISION_TEXT, EVIDENCE_LABEL, MILESTONE_LABEL, ROLE_LABEL, SOLVE_LABEL } from "./labels";
 import {
   BAD,
   BUTTON,
@@ -201,15 +203,40 @@ export function Summary({ plan }: { plan: PlanView }) {
   );
 }
 
-export function LockedBanner({ pov }: { pov: PovOwnerView }) {
+/** After lock: the score so far against the thresholds agreed at lock, and what they point to. */
+export function LockedBanner({ pov, criteria }: { pov: PovOwnerView; criteria: Criterion[] }) {
   if (pov.status !== "locked" && pov.status !== "decided") return null;
+  const go = pov.go_threshold;
+  const noGo = pov.no_go_threshold;
+  const { score, missing } = planScore(criteria);
+  // Once decided, the decision itself is what matters: no second opinion next to it.
+  const points = score === null || go === null || noGo === null || pov.status === "decided" ? null : suggestedDecision(score, go, noGo);
   return (
     <p className="flex min-h-9 flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs text-zinc-600 tabular-nums dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">
       <span className="text-[13px] font-medium text-zinc-900 dark:text-zinc-100">
-        Go at {pov.go_threshold ?? DASH} or more · No-go below {pov.no_go_threshold ?? DASH}
+        {score === null ? (
+          <>Score {DASH}</>
+        ) : (
+          <>
+            Score {score} of 100
+            {points ? <span className={`ml-1.5 ${DECISION_TEXT[points]}`}>· points to {DECISION_LABEL[points]}</span> : null}
+          </>
+        )}
+      </span>
+      {score === null && criteria.length > 0 ? (
+        <span>
+          {criteria.length - missing} of {criteria.length} criteria have a result
+        </span>
+      ) : null}
+      <span>
+        Go at {go ?? DASH} or more · No-go below {noGo ?? DASH}
       </span>
       <span>Baseline measured to {formatDate(pov.baseline_end_date)}</span>
-      <span>Plan locked, read-only</span>
+      <span>
+        {pov.status === "decided"
+          ? `Decided${pov.decision ? `: ${DECISION_LABEL[pov.decision]}` : ""}. Read-only`
+          : "Plan locked. Enter a result for each criterion, then record the decision"}
+      </span>
     </p>
   );
 }
@@ -557,18 +584,130 @@ const TARGET_KINDS = [
   { value: "yes_no", label: "Yes / No" },
 ] as const;
 
+// After lock the table swaps "who scores it" and "evidence" for the results themselves.
+const RESULT_COLUMNS = [
+  { label: "Criterion" },
+  { label: "Target", width: 110 },
+  { label: "Weight", width: 68, align: "right" },
+  { label: "Result", width: 130 },
+  { label: "Outcome", width: 120 },
+  { label: "Where the proof is", width: 180 },
+] as const;
+const YES_NO = [
+  { value: "yes", label: "Yes" },
+  { value: "no", label: "No" },
+] as const;
+const OUTCOMES = [
+  { value: "100", label: "Met" },
+  { value: "50", label: "Partly met" },
+  { value: "0", label: "Not met" },
+] as const;
+const OUTCOME_TONE: Record<string, string> = { "100": GOOD, "50": WARN, "0": BAD };
+
+/** Result, outcome and proof for one criterion. `results` is null once the plan is decided. */
+function ResultCells({ criterion: c, results }: { criterion: Criterion; results: Edit }) {
+  const save = (changes: Record<string, unknown>) => results?.patch("criterion", c.criterion_id, changes);
+  const outcome = c.score === null ? null : String(c.score);
+  // A score that isn't one of the three choices (entered elsewhere) still shows as what it is.
+  const outcomes: { value: string; label: string }[] =
+    outcome !== null && !OUTCOMES.some((o) => o.value === outcome) ? [...OUTCOMES, { value: outcome, label: `Partly met (${outcome})` }] : [...OUTCOMES];
+  const yesNo = c.result_value === null ? null : c.result_value >= 1 ? "yes" : "no";
+  return (
+    <>
+      <td className={CELL}>
+        {c.is_yes_no ? (
+          <Pick
+            value={yesNo}
+            options={YES_NO}
+            // Yes or no IS the outcome, so both are saved together.
+            onChange={(v) => save(v === null ? { result_value: null, score: null } : { result_value: v === "yes" ? 1 : 0, score: v === "yes" ? 100 : 0 })}
+            editable={Boolean(results)}
+            label="Result"
+            empty="Choose…"
+          />
+        ) : results ? (
+          <span className="flex items-center gap-1.5">
+            <EditText
+              value={c.result_value === null ? "" : String(c.result_value)}
+              onCommit={(v) => {
+                const n = Number(v.replace(/,/g, ""));
+                if (v && !Number.isFinite(n)) {
+                  results.warn(`“${v}” isn't a number, so the result wasn't saved.`);
+                  return false;
+                }
+                if (v && n === c.result_value) return false;
+                save({ result_value: v ? n : null });
+              }}
+              editable
+              label="Measured result"
+              placeholder="measured"
+              className="w-20 text-right tabular-nums"
+            />
+            <span className={`truncate text-xs ${MUTED}`}>{c.unit ?? ""}</span>
+          </span>
+        ) : c.result_value === null ? (
+          <span className={MUTED}>{DASH}</span>
+        ) : (
+          <span className="tabular-nums">
+            {formatNumber(c.result_value)} {c.unit ?? ""}
+          </span>
+        )}
+      </td>
+      <td className={CELL}>
+        {c.is_yes_no || !results ? (
+          outcome === null ? (
+            <span className={MUTED}>{c.is_yes_no && results ? "Set by the result" : DASH}</span>
+          ) : (
+            <span className={OUTCOME_TONE[outcome] ?? WARN}>{outcomes.find((o) => o.value === outcome)?.label}</span>
+          )
+        ) : (
+          <Pick value={outcome} options={outcomes} onChange={(v) => save({ score: v === null ? null : Number(v) })} editable label="Outcome" empty="Choose…" />
+        )}
+      </td>
+      <td className={CELL}>
+        {results ? (
+          <EditText
+            value={c.measurement_ref ?? ""}
+            onCommit={(v) => save({ measurement_ref: v || null })}
+            editable
+            label="Where the proof is"
+            placeholder="link, deck and slide, query…"
+            maxLength={300}
+          />
+        ) : !c.measurement_ref ? (
+          <span className={MUTED}>{DASH}</span>
+        ) : /^https:\/\/\S+$/.test(c.measurement_ref) ? (
+          <a href={c.measurement_ref} target="_blank" rel="noopener noreferrer" title={c.measurement_ref} className={`block truncate ${LINK}`}>
+            {c.measurement_ref}
+          </a>
+        ) : (
+          <span className="block truncate" title={c.measurement_ref}>
+            {c.measurement_ref}
+          </span>
+        )}
+      </td>
+    </>
+  );
+}
+
 function CriterionRow({
   criterion: c,
   links,
   painPoints,
   stakeholders,
   edit,
+  showResults,
+  results,
 }: {
   criterion: Criterion;
   links: CriterionLink[];
   painPoints: PainPoint[];
   stakeholders: Stakeholder[];
   edit: Edit;
+  /** The plan is locked or decided: show results in place of scorer and evidence. */
+  showResults: boolean;
+  /** Set while results can still be entered (locked, not yet decided). */
+  results: Edit;
 }) {
   const patch = (changes: Record<string, unknown>) => edit?.patch("criterion", c.criterion_id, changes);
   const linked = new Set(links.filter((l) => l.criterion_id === c.criterion_id).map((l) => l.pain_point_id));
@@ -586,6 +725,12 @@ function CriterionRow({
         <span className="block font-medium text-zinc-900 dark:text-zinc-100">
           <EditText value={c.statement} onCommit={(statement) => patch({ statement })} editable={Boolean(edit)} label="Criterion" required maxLength={300} />
         </span>
+        {showResults ? (
+          <span className={`block truncate text-xs ${MUTED}`}>
+            Scored by {scorer?.name ?? "nobody named"}
+            {c.evidence_source ? ` · proof from ${EVIDENCE_LABEL[c.evidence_source].toLowerCase()}` : ""}
+          </span>
+        ) : null}
         <span className={`flex min-h-5 flex-wrap items-center gap-1 text-xs ${MUTED}`}>
           {solves.length === 0 ? <Flag tone={BAD}>Not linked to a pain point</Flag> : <span>Solves</span>}
           {solves.map((p) =>
@@ -673,20 +818,26 @@ function CriterionRow({
           className="text-right tabular-nums"
         />
       </td>
-      <td className={CELL}>
-        {edit ? (
-          <Pick value={c.scorer_id} options={scorers} onChange={(scorer_id) => patch({ scorer_id })} editable label="Scorer" empty="Choose…" />
-        ) : scorer ? (
-          <span className="block truncate">{scorer.name}</span>
-        ) : c.scorer_id ? (
-          <Flag tone={`text-xs ${BAD}`}>Not on the plan</Flag>
-        ) : (
-          <span className={MUTED}>{DASH}</span>
-        )}
-      </td>
-      <td className={CELL}>
-        <Pick value={c.evidence_source} options={EVIDENCE_OPTIONS} onChange={(evidence_source) => patch({ evidence_source })} editable={Boolean(edit)} label="Evidence source" empty="Choose…" />
-      </td>
+      {showResults ? (
+        <ResultCells criterion={c} results={results} />
+      ) : (
+        <>
+          <td className={CELL}>
+            {edit ? (
+              <Pick value={c.scorer_id} options={scorers} onChange={(scorer_id) => patch({ scorer_id })} editable label="Scorer" empty="Choose…" />
+            ) : scorer ? (
+              <span className="block truncate">{scorer.name}</span>
+            ) : c.scorer_id ? (
+              <Flag tone={`text-xs ${BAD}`}>Not on the plan</Flag>
+            ) : (
+              <span className={MUTED}>{DASH}</span>
+            )}
+          </td>
+          <td className={CELL}>
+            <Pick value={c.evidence_source} options={EVIDENCE_OPTIONS} onChange={(evidence_source) => patch({ evidence_source })} editable={Boolean(edit)} label="Evidence source" empty="Choose…" />
+          </td>
+        </>
+      )}
       <td className="pr-2 text-right">{edit ? <Remove onRemove={() => edit.remove("criterion", c.criterion_id)} label={c.statement} /> : null}</td>
     </tr>
   );
@@ -699,6 +850,8 @@ export function Criteria({
   stakeholders,
   edit,
   state,
+  showResults = false,
+  results = null,
 }: {
   items: Criterion[];
   links: CriterionLink[];
@@ -706,12 +859,26 @@ export function Criteria({
   stakeholders: Stakeholder[];
   edit: Edit;
   state: SectionState;
+  showResults?: boolean;
+  results?: Edit;
 }) {
+  const columns = showResults ? RESULT_COLUMNS : CRITERIA_COLUMNS;
+  const { score, missing } = planScore(items);
   const total = items.reduce((t, c) => t + c.weight_pct, 0);
   const left = 100 - total;
   const max = Math.max(0, ...items.map((c) => c.position ?? 0));
   const footer =
-    items.length === 0 ? null : (
+    items.length === 0 ? null : showResults ? (
+      <p className="flex h-9 items-center justify-end border-t border-zinc-100 px-3 text-xs tabular-nums dark:border-zinc-800/70">
+        {score === null ? (
+          <span className={results ? WARN : MUTED}>
+            {missing} of {items.length} still {missing === 1 ? "needs" : "need"} a result
+          </span>
+        ) : (
+          <span>Score {score} of 100 (each weight × its outcome)</span>
+        )}
+      </p>
+    ) : (
       <p className="flex h-9 items-center justify-end border-t border-zinc-100 px-3 text-xs tabular-nums dark:border-zinc-800/70">
         <span>Total {total} / 100</span>
         <span className={`ml-1.5 ${left === 0 ? GOOD : left > 0 ? WARN : BAD}`}>
@@ -720,10 +887,19 @@ export function Criteria({
       </p>
     );
   return (
-    <Section title="Success criteria" state={state} columns={CRITERIA_COLUMNS} footer={footer}>
-      {items.length === 0 && !edit ? <EmptyRow span={CRITERIA_COLUMNS.length}>No success criteria.</EmptyRow> : null}
+    <Section title={showResults ? "Success criteria and results" : "Success criteria"} state={state} columns={columns} footer={footer}>
+      {items.length === 0 && !edit ? <EmptyRow span={columns.length}>No success criteria.</EmptyRow> : null}
       {items.map((c) => (
-        <CriterionRow key={c.criterion_id} criterion={c} links={links} painPoints={painPoints} stakeholders={stakeholders} edit={edit} />
+        <CriterionRow
+          key={c.criterion_id}
+          criterion={c}
+          links={links}
+          painPoints={painPoints}
+          stakeholders={stakeholders}
+          edit={edit}
+          showResults={showResults}
+          results={results}
+        />
       ))}
       {edit ? (
         <AddRow
@@ -736,7 +912,7 @@ export function Criteria({
               { statement },
               {
                 statement, target_value: null, unit: null, is_yes_no: false, weight_pct: 0, scorer_id: null,
-                evidence_source: null, position: max + 1,
+                evidence_source: null, result_value: null, score: null, measurement_ref: null, position: max + 1,
               },
             )
           }
@@ -800,7 +976,19 @@ function dateProblem(items: Milestone[], kind: MilestoneKind, date: string): str
   return null;
 }
 
-export function Timeline({ items, edit, state }: { items: Milestone[]; edit: Edit; state: SectionState }) {
+export function Timeline({
+  items,
+  edit,
+  state,
+  progress = null,
+}: {
+  items: Milestone[];
+  edit: Edit;
+  state: SectionState;
+  /** Set on a locked plan: dates are fixed, but milestones can still be ticked off. */
+  progress?: Edit;
+}) {
+  const tick = edit ?? progress;
   const kickoff = items.find((m) => m.kind === "kickoff")?.due_date ?? null;
   return (
     <Section title="Timeline" state={state} columns={TIMELINE_COLUMNS}>
@@ -837,13 +1025,13 @@ export function Timeline({ items, edit, state }: { items: Milestone[]; edit: Edi
             <td className={`${CELL} text-right tabular-nums ${MUTED}`}>{offset === null ? DASH : `Day ${offset}`}</td>
             <td className={`${CELL} text-xs`}>
               {m ? (
-                edit ? (
+                tick ? (
                   <label className="inline-flex items-center gap-1.5">
                     <input
                       type="checkbox"
                       checked={m.completed_at !== null}
                       onChange={(e) =>
-                        edit.patch("milestone", m.milestone_id, { completed: e.target.checked }, { completed_at: e.target.checked ? new Date().toISOString() : null })
+                        tick.patch("milestone", m.milestone_id, { completed: e.target.checked }, { completed_at: e.target.checked ? new Date().toISOString() : null })
                       }
                     />
                     <span className={m.completed_at ? GOOD : MUTED}>{m.completed_at ? `Done ${formatDay(m.completed_at)}` : "Not done"}</span>

@@ -92,3 +92,21 @@ export function addDays(iso: string | null | undefined, days: number): string | 
   if (!p) return null;
   return new Date(Date.UTC(p.y, p.m - 1, p.d + days)).toISOString().slice(0, 10);
 }
+
+/** The plan's score so far: sum of weight x score / 100 over the criteria that have a result. */
+export function planScore(criteria: { weight_pct: number; score: number | null }[]): {
+  /** Null until every criterion has a result. */
+  score: number | null;
+  missing: number;
+} {
+  const missing = criteria.filter((c) => c.score === null).length;
+  if (criteria.length === 0 || missing > 0) return { score: null, missing };
+  // Sum first, then round half up to one decimal: the same as weighted_score in pov_rules.py.
+  const total = criteria.reduce((t, c) => t + c.weight_pct * (c.score ?? 0), 0);
+  return { score: Math.round(total / 10) / 10, missing: 0 };
+}
+
+/** What the thresholds agreed at lock say about a score. */
+export function suggestedDecision(score: number, go: number, noGo: number): "go" | "extend" | "no_go" {
+  return score >= go ? "go" : score < noGo ? "no_go" : "extend";
+}

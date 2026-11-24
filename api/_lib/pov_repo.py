@@ -20,6 +20,7 @@ from uuid import UUID
 from google.cloud import bigquery
 
 from .pov_bigquery import get_pov_client, pov_table
+from .pov_rules import ADMIN_FIELDS
 from .pov_models import PATCHABLE_FIELDS, PovCreate, PovListItem, PovOwnerView
 
 BUDGET_S = 8.0  # reads: one deadline for the whole request (every query + retry), under the 10s guardrail
@@ -71,11 +72,14 @@ def build_patch_script(changes: dict[str, object]) -> tuple[str, list[bigquery.S
         raise ValueError(f"cannot patch: {sorted(unknown) or 'no fields'}")
     fields = sorted(changes)
     sets = ", ".join(f"{f} = @v_{f}" for f in fields)
+    # `seq` counts changes to what the Sponsor agreed to. The account link and the owner are not
+    # part of that, so they leave it alone (and a recorded agreement stays valid).
+    seq_step = 0 if set(changes) <= ADMIN_FIELDS else 1
     pov, log = pov_table("pov"), pov_table("pov_change_log")
     sql = f"""
 DECLARE n INT64 DEFAULT 0;
 BEGIN TRANSACTION;
-UPDATE `{pov}` SET {sets}, version = version + 1, seq = seq + 1, updated_by = @actor, updated_at = CURRENT_TIMESTAMP()
+UPDATE `{pov}` SET {sets}, version = version + 1, seq = seq + {seq_step}, updated_by = @actor, updated_at = CURRENT_TIMESTAMP()
 WHERE pov_id = @pov_id AND version = @base_version AND deleted_at IS NULL;
 SET n = @@row_count;
 IF n = 1 THEN

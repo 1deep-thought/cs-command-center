@@ -47,7 +47,7 @@ class BigQueryLockRepo(BigQueryItemRepo):
 
     def write_transition(
         self,
-        target: Literal["collaborating", "locked"],
+        target: Literal["collaborating", "locked", "decided"],
         *,
         pov_id: str,
         from_status: str,
@@ -60,6 +60,7 @@ class BigQueryLockRepo(BigQueryItemRepo):
         no_go_threshold: int | None = None,
         baseline_end_date: date | None = None,
         snapshot_json: str | None = None,
+        decision: str | None = None,
     ) -> int:
         sql, params = build_transition_script(
             target,
@@ -77,6 +78,7 @@ class BigQueryLockRepo(BigQueryItemRepo):
             no_go_threshold=no_go_threshold,
             baseline_end_date=baseline_end_date,
             snapshot_json=snapshot_json,
+            decision=decision,
         )
         rows = self._run(sql, [_to_query_param(p) for p in params], retry=True)
         if not rows:

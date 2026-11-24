@@ -11,10 +11,16 @@ from datetime import datetime, timezone
 from typing import Literal, Protocol
 from uuid import UUID, uuid4
 
-from .pov_item_specs import MILESTONE, PAIN_POINT, ItemSpec
+from .pov_item_specs import CRITERION, MILESTONE, PAIN_POINT, ItemSpec
 from .pov_milestone_rules import invalid_milestone_dates
 from .pov_models import PovOwnerView
-from .pov_rules import invalid_pain_point_change, plan_is_editable
+from .pov_rules import (
+    PROGRESS_STATUSES,
+    RESULT_FIELDS,
+    RESULT_STATUSES,
+    invalid_pain_point_change,
+    plan_is_editable,
+)
 
 # write_item result codes (see pov_item_sql)
 APPLIED, FROZEN, STALE, FULL, EXISTS, DUPLICATE = 1, 0, 2, 3, 4, 5
@@ -42,7 +48,10 @@ class ItemRepo(Protocol):
         values: dict[str, object],
         old: dict[str, object],
         base_version: int | None,
-    ) -> int: ...
+        statuses: tuple[str, ...] | None = None,
+    ) -> int:
+        """`statuses`: plan statuses the write is allowed in; None = while the plan is editable."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -155,12 +164,25 @@ def patch_item(repo: ItemRepo, spec: ItemSpec, pov_id: str, item_id: str, patch,
         return ItemResult("not_found")
     if repo.op_applied(pov_id, patch.op_id, spec.kind, item_id):
         return ItemResult("applied", current)
-    if not plan_is_editable(pov.status):
+
+    changes = patch.changes()
+    # Most edits are to the plan and stop at lock. Two things happen after it instead:
+    # a criterion gets its result, and a milestone gets ticked off.
+    statuses: tuple[str, ...] | None = None
+    if spec is CRITERION and RESULT_FIELDS & changes.keys():
+        if not changes.keys() <= RESULT_FIELDS:
+            return ItemResult("invalid", current, code="results_separately")
+        if pov.status not in RESULT_STATUSES:
+            # Before lock there is nothing agreed to measure against; after the decision it is history.
+            return ItemResult("invalid", current, code="results_need_locked_plan") if plan_is_editable(pov.status) else ItemResult("frozen", current)
+        statuses = RESULT_STATUSES
+    elif spec is MILESTONE and changes.keys() == {"completed"} and pov.status in PROGRESS_STATUSES:
+        statuses = PROGRESS_STATUSES
+    elif not plan_is_editable(pov.status):
         return ItemResult("frozen", current)
     if current["version"] != patch.base_version:
         return ItemResult("conflict", current)
 
-    changes = patch.changes()
     seq = None
     if spec is MILESTONE:
         if "due_date" in changes and changes["due_date"] == current.get("due_date"):
@@ -188,6 +210,7 @@ def patch_item(repo: ItemRepo, spec: ItemSpec, pov_id: str, item_id: str, patch,
     code = repo.write_item(
         spec, "update", pov_id=pov_id, item_id=item_id, actor=actor, op_id=str(patch.op_id),
         values=changes, old=old, base_version=patch.base_version, **_seq_kw(seq),
+        **({} if statuses is None else {"statuses": statuses}),
     )
     return _outcome(repo, spec, pov_id, item_id, code, str(patch.op_id))
 

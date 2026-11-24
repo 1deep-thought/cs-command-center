@@ -7,9 +7,18 @@ import pytest
 from pydantic import ValidationError
 
 from api._lib.pov_item_service import create_item, delete_item, list_items, patch_item
-from api._lib.pov_item_specs import CRITERION, PAIN_POINT, STAKEHOLDER
+from api._lib.pov_item_specs import CRITERION, MILESTONE, PAIN_POINT, STAKEHOLDER
 from api._lib.pov_item_sql import build_write_script
-from api._lib.pov_items import PainPointCreate, PainPointPatch, StakeholderCreate, StakeholderPatch
+from api._lib.pov_items import (
+    CriterionCreate,
+    CriterionPatch,
+    MilestoneCreate,
+    MilestonePatch,
+    PainPointCreate,
+    PainPointPatch,
+    StakeholderCreate,
+    StakeholderPatch,
+)
 from api._lib.pov_models import PovOwnerView
 
 NOW = datetime(2026, 11, 22, tzinfo=timezone.utc)
@@ -48,11 +57,14 @@ class FakeItems:
     def get_item(self, spec, pov_id, item_id):
         return self.items.get((spec.kind, item_id))
 
-    def write_item(self, spec, mode, *, pov_id, item_id, actor, op_id, values, old, base_version, expected_seq=None):
+    def write_item(
+        self, spec, mode, *, pov_id, item_id, actor, op_id, values, old, base_version, expected_seq=None,
+        statuses=("draft", "collaborating"),
+    ):
         self.writes += 1
         if expected_seq is not None and expected_seq != self.pov.seq:
             return 2
-        if self.pov.status not in ("draft", "collaborating"):
+        if self.pov.status not in statuses:
             return 0
         key = (spec.kind, item_id)
         if mode == "create":
@@ -308,3 +320,84 @@ def test_resending_verified_does_not_restamp_and_adding_numbers_sets_a_source():
     assert added.item["value_source"] == "prospect_stated"
     cleared = patch_item(repo, PAIN_POINT, "p1", bare, PainPointPatch(base_version=2, op_id=uuid4(), value_low_minor=None, value_high_minor=None), "a")
     assert cleared.item["value_source"] is None
+
+
+# ------------------------------------------------------------------ after lock: results and progress
+
+
+def with_criterion(status="locked"):
+    repo = FakeItems()
+    cid = create_item(repo, CRITERION, "p1", CriterionCreate(statement="Answers in under 3 s"), "a").item["criterion_id"]
+    repo.pov = repo.pov.model_copy(update={"status": status})
+    return repo, cid
+
+
+def result(repo, cid, base_version=1, **fields):
+    return patch_item(repo, CRITERION, "p1", cid, CriterionPatch(base_version=base_version, op_id=uuid4(), **fields), "a")
+
+
+def test_results_are_entered_on_a_locked_plan():
+    repo, cid = with_criterion()
+    r = result(repo, cid, score=50, result_value=4.2, measurement_ref="Readout deck, slide 7")
+    assert r.kind == "applied" and (r.item["score"], r.item["result_value"]) == (50, 4.2)
+    cleared = result(repo, cid, base_version=2, score=None)
+    assert cleared.kind == "applied" and cleared.item["score"] is None
+
+
+def test_results_wait_for_lock_and_stop_at_the_decision():
+    repo, cid = with_criterion("collaborating")
+    r = result(repo, cid, score=100)
+    assert (r.kind, r.code) == ("invalid", "results_need_locked_plan") and repo.writes == 1  # only the create
+    repo, cid = with_criterion("decided")
+    assert result(repo, cid, score=100).kind == "frozen"
+
+
+def test_a_locked_plan_itself_still_cannot_change():
+    repo, cid = with_criterion()
+    assert result(repo, cid, statement="Something easier").kind == "frozen"
+    mixed = result(repo, cid, score=100, weight_pct=90)
+    assert (mixed.kind, mixed.code) == ("invalid", "results_separately")
+    with pytest.raises(ValidationError):
+        CriterionPatch(base_version=1, op_id=uuid4(), score=101)
+
+
+def test_milestones_are_ticked_off_after_lock_but_dates_stay_fixed():
+    from datetime import date
+
+    repo = FakeItems()
+    mid = create_item(repo, MILESTONE, "p1", MilestoneCreate(kind="kickoff", due_date=date(2027, 1, 4)), "a").item["milestone_id"]
+    repo.pov = repo.pov.model_copy(update={"status": "locked"})
+    done = patch_item(repo, MILESTONE, "p1", mid, MilestonePatch(base_version=1, op_id=uuid4(), completed=True), "a")
+    assert done.kind == "applied" and done.item["completed_at"] is not None
+    moved = patch_item(repo, MILESTONE, "p1", mid, MilestonePatch(base_version=2, op_id=uuid4(), due_date=date(2027, 1, 5)), "a")
+    assert moved.kind == "frozen"
+    repo.pov = repo.pov.model_copy(update={"status": "decided"})
+    late = patch_item(repo, MILESTONE, "p1", mid, MilestonePatch(base_version=2, op_id=uuid4(), completed=False), "a")
+    assert late.kind == "frozen"
+
+
+def test_write_sql_is_gated_on_the_statuses_it_is_given():
+    sql, _ = build(CRITERION, "update", {"score": 100}, base_version=1, statuses=("locked",))
+    assert "status IN ('locked')" in sql and "'draft'" not in sql
+    sql, _ = build(CRITERION, "update", {"statement": "x"}, base_version=1)
+    assert "status IN ('draft', 'collaborating')" in sql
+    with pytest.raises(ValueError):
+        build(CRITERION, "update", {"score": 1}, base_version=1, statuses=("locked') OR ('1'='1",))
+
+
+def test_tick_sql_keeps_the_seq_gate_and_its_stale_branch_on_the_same_statuses():
+    sql, _ = build(MILESTONE, "update", {"completed_at": None}, base_version=1, expected_seq=4, statuses=("draft", "collaborating", "locked"))
+    assert sql.count("status IN ('draft', 'collaborating', 'locked')") == 2 and "seq = @expected_seq" in sql
+
+
+def test_a_result_arriving_just_after_the_decision_is_refused():
+    class DecidedMeanwhile(FakeItems):
+        def write_item(self, spec, mode, **kw):
+            if mode == "update":
+                self.pov = self.pov.model_copy(update={"status": "decided"})
+            return super().write_item(spec, mode, **kw)
+
+    repo = DecidedMeanwhile()
+    cid = create_item(repo, CRITERION, "p1", CriterionCreate(statement="x"), "a").item["criterion_id"]
+    repo.pov = repo.pov.model_copy(update={"status": "locked"})
+    assert result(repo, cid, score=100).kind == "frozen"

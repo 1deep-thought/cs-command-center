@@ -14,7 +14,7 @@ from typing import Literal
 
 from .pov_item_sql import LOG_COLUMNS, Param
 
-Target = Literal["collaborating", "locked"]
+Target = Literal["collaborating", "locked", "decided"]
 
 
 def build_transition_script(
@@ -34,6 +34,7 @@ def build_transition_script(
     no_go_threshold: int | None = None,
     baseline_end_date: date | None = None,
     snapshot_json: str | None = None,
+    decision: str | None = None,
 ) -> tuple[str, list[Param]]:
     params = [
         Param("pov_id", "STRING", pov_id),
@@ -67,6 +68,13 @@ def build_transition_script(
             f"    SELECT pov_id, version, PARSE_JSON(@snapshot), @actor, CURRENT_TIMESTAMP()\n"
             f"    FROM `{pov_table}` WHERE pov_id = @pov_id;\n"
         )
+    elif target == "decided":
+        if decision not in ("go", "extend", "no_go") or expected_seq is None:
+            raise ValueError("deciding needs a decision and expected_seq")
+        params += [Param("expected_seq", "INT64", expected_seq), Param("decision", "STRING", decision)]
+        sets = ", decision = @decision"
+        # The results were read at this seq: a result changed since then means the score must be re-read.
+        gate = " AND seq = @expected_seq"
 
     sql = f"""
 DECLARE result INT64 DEFAULT 0;

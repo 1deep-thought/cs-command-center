@@ -153,7 +153,7 @@ class PovConflict(BaseModel):
 
 # ------------------------------------------------------------------ readiness and transitions
 
-TransitionTarget = Literal["collaborating", "locked"]
+TransitionTarget = Literal["collaborating", "locked", "decided"]
 ReadinessKey = Literal["pain_points", "stakeholders", "criteria", "links", "dates", "sponsor_agreed"]
 
 
@@ -193,11 +193,18 @@ class TransitionIn(Strict):
     # Only when locking. Omitted: keep what the plan has, else the defaults (80 and 60).
     go_threshold: Threshold | None = None
     no_go_threshold: Threshold | None = None
+    # Only when deciding. The decision is the owner's call; the score and thresholds advise it.
+    decision: PovDecision | None = None
+    note: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)] | None = None
 
     @model_validator(mode="after")
     def _check(self) -> TransitionIn:
         if self.to != "locked" and (self.go_threshold is not None or self.no_go_threshold is not None):
             raise ValueError("thresholds are set when locking")
+        if self.to == "decided" and self.decision is None:
+            raise ValueError("a decision is needed: go, extend or no_go")
+        if self.to != "decided" and (self.decision is not None or self.note is not None):
+            raise ValueError("decision and note are set when deciding")
         return self
 
 

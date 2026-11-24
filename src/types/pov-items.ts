@@ -86,6 +86,12 @@ export interface Criterion extends ItemBase {
   weight_pct: number;
   scorer_id: string | null;
   evidence_source: EvidenceSource | null;
+  /** Results, entered once the plan is locked. For a yes/no criterion result_value is 1 or 0. */
+  result_value: number | null;
+  /** How far the criterion was met, 0 to 100. The plan's score is the sum of weight x score / 100. */
+  score: number | null;
+  /** Where the proof is: a link, a deck and slide, a query. */
+  measurement_ref: string | null;
 }
 export interface CriterionCreate {
   op_id?: string;
@@ -107,6 +113,11 @@ export interface CriterionPatch {
   weight_pct?: number;
   scorer_id?: string | null;
   evidence_source?: EvidenceSource | null;
+  /** Results: only on a locked plan, and never together with the plan fields above
+   * (422 "results_separately" / "results_need_locked_plan"; 409 plan_frozen once decided). */
+  result_value?: number | null;
+  score?: number | null;
+  measurement_ref?: string | null;
 }
 
 /** 409 body for item writes. `current` is null when there is no stored item to show (limit_reached, or plan_frozen on a create). */

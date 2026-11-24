@@ -20,8 +20,8 @@ export function PlanDetails({
   onClose,
 }: {
   pov: PovOwnerView;
-  /** Customer accounts to choose from, or null when the account data couldn't be read. */
-  accounts: AccountOption[] | null;
+  /** Customer accounts to choose from: undefined while loading, null when they couldn't be read. */
+  accounts: AccountOption[] | null | undefined;
   frozen: boolean;
   onSave: (changes: Record<string, unknown>) => void;
   onClose: () => void;
@@ -64,7 +64,8 @@ export function PlanDetails({
         save();
       }}
       onKeyDown={(event) => {
-        if (event.key === "Escape") {
+        // Esc on the account list only closes the list.
+        if (event.key === "Escape" && !(event.target instanceof HTMLSelectElement)) {
           event.stopPropagation();
           onClose();
         }
@@ -83,7 +84,7 @@ export function PlanDetails({
           Customer account
           <select id={`${id}-account`} className={INPUT} value={account} disabled={!accounts} onChange={(e) => setAccount(e.target.value)}>
             <option value="">Not a customer yet</option>
-            {unknown ? <option value={unknown}>{unknown} (not in the account list)</option> : null}
+            {unknown ? <option value={unknown}>{accounts ? `${unknown} (not in the account list)` : "Current account"}</option> : null}
             {options.map((a) => (
               <option key={a.account_id} value={a.account_id}>
                 {a.account_name}
@@ -110,7 +111,11 @@ export function PlanDetails({
         ) : (
           <span className={`text-xs ${MUTED}`}>
             {frozen ? "The plan is locked, so its title and prospect are fixed. " : ""}
-            {accounts ? "" : "The account list couldn't be loaded, so the account link can't be changed right now. "}
+            {accounts === undefined
+              ? "Loading the account list… "
+              : accounts === null
+                ? "The account list couldn't be loaded, so the account link can't be changed right now. "
+                : ""}
             Only the owner or an admin can hand a plan to someone else.
           </span>
         )}

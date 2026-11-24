@@ -6,6 +6,7 @@ Pure functions over plain values so they are testable without BigQuery or FastAP
 from __future__ import annotations
 
 from datetime import date
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Final
 
 from .pov_milestone_rules import invalid_milestone_dates
@@ -17,6 +18,27 @@ EDITABLE_STATUSES: Final = frozenset({"draft", "collaborating"})
 # Not part of what the Sponsor agreed to: who owns the plan and which customer account it
 # belongs to. These may change at any status (handover happens after the decision).
 ADMIN_FIELDS: Final = frozenset({"account_id", "owner_email"})
+
+
+# What happens AFTER the plan locks: results are entered per criterion and milestones are ticked off.
+RESULT_FIELDS: Final = frozenset({"result_value", "score", "measurement_ref"})
+RESULT_STATUSES: Final = ("locked",)
+PROGRESS_STATUSES: Final = ("draft", "collaborating", "locked")  # ticking a milestone done
+
+
+def weighted_score(criteria: list[dict[str, object]]) -> float | None:
+    """Sum of weight x score / 100, to one decimal. None until every criterion has a score."""
+    if not criteria or any(c.get("score") is None for c in criteria):
+        return None
+    # Exact decimal arithmetic, rounded half up: the page (planScore in format.ts) does the same,
+    # so the score in the log and the one on screen never differ at a threshold.
+    total = sum((Decimal(str(c.get("weight_pct") or 0)) * Decimal(str(c["score"])) for c in criteria), Decimal(0))
+    return float((total / 100).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP))
+
+
+def suggested_decision(score: float, go: int, no_go: int) -> str:
+    """What the thresholds agreed at lock say. The owner still makes the call."""
+    return "go" if score >= go else "no_go" if score < no_go else "extend"
 
 
 def plan_is_editable(status: str) -> bool:
@@ -62,8 +84,8 @@ def invalid_pain_point_change(current: dict[str, object], changes: dict[str, obj
 
 # ------------------------------------------------------------------ transitions
 
-# The only moves a plan makes forward (design doc: four statuses). Deciding and abandoning come later.
-TRANSITIONS: Final = {"collaborating": "draft", "locked": "collaborating"}  # target -> status it comes from
+# The only moves a plan makes forward (design doc: four statuses). Abandoning comes later.
+TRANSITIONS: Final = {"collaborating": "draft", "locked": "collaborating", "decided": "locked"}  # target -> status it comes from
 DEFAULT_GO, DEFAULT_NO_GO = 80, 60
 
 
@@ -75,6 +97,8 @@ def allowed_transitions(status: str, *, is_owner: bool, ready: bool) -> list[str
         return ["collaborating"]
     if status == "collaborating" and ready:
         return ["locked"]
+    if status == "locked":
+        return ["decided"]  # refused until every criterion has a result
     return []
 
 

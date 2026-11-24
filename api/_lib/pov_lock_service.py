@@ -14,7 +14,15 @@ from typing import Literal, Protocol
 from uuid import UUID
 
 from .pov_models import PovOwnerView, Readiness, TransitionIn
-from .pov_rules import DEFAULT_GO, DEFAULT_NO_GO, TRANSITIONS, allowed_transitions, readiness
+from .pov_rules import (
+    DEFAULT_GO,
+    DEFAULT_NO_GO,
+    TRANSITIONS,
+    allowed_transitions,
+    readiness,
+    suggested_decision,
+    weighted_score,
+)
 
 APPLIED, MISSING, STALE = 1, 0, 2
 PARTS = ("pain_points", "stakeholders", "criteria", "links", "milestones")
@@ -30,7 +38,7 @@ class LockRepo(Protocol):
         ...
     def write_transition(
         self,
-        target: Literal["collaborating", "locked"],
+        target: Literal["collaborating", "locked", "decided"],
         *,
         pov_id: str,
         from_status: str,
@@ -43,6 +51,7 @@ class LockRepo(Protocol):
         no_go_threshold: int | None = None,
         baseline_end_date: date | None = None,
         snapshot_json: str | None = None,
+        decision: str | None = None,
     ) -> int: ...
     def write_agreement(
         self, *, pov_id: str, actor: str, op_id: str, detail: dict[str, object], expected_seq: int
@@ -114,6 +123,8 @@ def transition(repo: LockRepo, pov_id: str, body: TransitionIn, actor: str) -> T
         return TransitionResult("forbidden", pov)
     target = body.to
     if pov.status == target:
+        if target == "decided" and pov.decision != body.decision:
+            return TransitionResult("invalid_transition", pov)  # already decided otherwise: never report that as saved
         return TransitionResult("applied", pov)  # already there: a retry, or a second click
     from_status = TRANSITIONS[target]
     if pov.status != from_status:
@@ -151,14 +162,27 @@ def transition(repo: LockRepo, pov_id: str, body: TransitionIn, actor: str) -> T
             "snapshot_json": _dumps({"pov": agreed.model_dump(mode="json"), AGREED: parts.get(AGREED), **rows}),
         }
 
+    if target == "decided":
+        assert body.decision is not None  # the request model requires it
+        criteria = _rows(repo.plan_parts(pov_id))["criteria"]
+        score = weighted_score(criteria)
+        if score is None:
+            return TransitionResult("invalid", pov, code="results_missing")
+        go, no_go = pov.go_threshold or DEFAULT_GO, pov.no_go_threshold or DEFAULT_NO_GO
+        # The log keeps what the numbers said next to what was decided, and why if they differ.
+        new.update(decision=body.decision, score=score, suggested=suggested_decision(score, go, no_go))
+        if body.note:
+            new["note"] = body.note
+        extra = {"expected_seq": pov.seq, "decision": body.decision}
+
     code = repo.write_transition(
         target, pov_id=pov_id, from_status=from_status, actor=actor, op_id=str(body.op_id), old=old, new=new, **extra,  # type: ignore[arg-type]
     )
     latest = repo.get_pov(pov_id)
     if code == MISSING or latest is None:
         return TransitionResult("not_found")
-    if code == APPLIED or latest.status == target:  # the second case: our own twin request got there first
-        return TransitionResult("applied", latest)
+    if code == APPLIED or (latest.status == target and (target != "decided" or latest.decision == body.decision)):
+        return TransitionResult("applied", latest)  # the second case: our own twin request got there first
     if latest.status != from_status:
         return TransitionResult("invalid_transition", latest)
     return TransitionResult("conflict", latest)  # edited while locking: re-read readiness and try again

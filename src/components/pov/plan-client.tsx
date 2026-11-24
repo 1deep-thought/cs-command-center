@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { SignInCard, SignOutButton } from "@/components/auth/sign-in";
 import type { PlanView } from "@/types/pov-items";
 import type { ReadinessKey } from "@/types/pov";
@@ -10,10 +11,33 @@ import { Criteria, LockedBanner, PainPoints, Stakeholders, Summary, Timeline, ty
 import { usePlanStore } from "./use-plan-store";
 
 /** The plan page body. Holds the plan in the browser so edits show at once and save in the background. */
-export function PlanClient({ plan: initial, accounts }: { plan: PlanView; accounts: AccountOption[] | null }) {
+export function PlanClient({
+  plan: initial,
+  accounts: accountsPromise,
+}: {
+  plan: PlanView;
+  /** Resolves to the customer accounts, or null when they couldn't be read. Never rejects. */
+  accounts: Promise<AccountOption[] | null>;
+}) {
+  // undefined = still loading.
+  const [accounts, setAccounts] = useState<AccountOption[] | null | undefined>(undefined);
+  useEffect(() => {
+    let live = true;
+    accountsPromise.then(
+      (list) => live && setAccounts(list),
+      () => live && setAccounts(null),
+    );
+    return () => {
+      live = false;
+    };
+  }, [accountsPromise]);
   const { plan, pending, syncing, notice, dismiss, editor, resync, authNeeded, needAuth, signedIn } = usePlanStore(initial);
   const { pov, pain_points, stakeholders, criteria, milestones, links, readiness } = plan;
   const edit = pov.status === "draft" || pov.status === "collaborating" ? editor : null;
+  // After lock the plan itself is fixed; what is still entered is each criterion's result and
+  // which milestones are done. Once decided, nothing.
+  const results = pov.status === "locked" ? editor : null;
+  const showResults = pov.status === "locked" || pov.status === "decided";
 
   // Each section shows what the lock checks still want from it (editable plans only).
   const stale = pending > 0 || syncing;
@@ -34,6 +58,7 @@ export function PlanClient({ plan: initial, accounts }: { plan: PlanView; accoun
         stale={stale}
         saving={pending}
         accounts={accounts}
+        criteria={criteria}
         onChanged={resync}
         onDetails={editor.patchPov}
         onAuthNeeded={needAuth}
@@ -60,7 +85,7 @@ export function PlanClient({ plan: initial, accounts }: { plan: PlanView; accoun
           />
         </div>
       ) : null}
-      <LockedBanner pov={pov} />
+      <LockedBanner pov={pov} criteria={criteria} />
       <Summary plan={plan} />
       {/* Value, then proof, then who signs, then when: the order the conversation runs in. */}
       <div className={SECTIONS}>
@@ -72,14 +97,16 @@ export function PlanClient({ plan: initial, accounts }: { plan: PlanView; accoun
           stakeholders={stakeholders}
           edit={edit}
           state={state("criteria", "links")}
+          showResults={showResults}
+          results={results}
         />
         <Stakeholders items={stakeholders} edit={edit} state={state("stakeholders")} />
-        <Timeline items={milestones} edit={edit} state={state("dates")} />
+        <Timeline items={milestones} edit={edit} state={state("dates")} progress={results} />
       </div>
       <div className="flex h-4 items-center justify-between gap-3">
         <p className={`min-w-0 truncate text-[11px] leading-4 ${MUTED}`}>
           Owner {pov.owner_email}
-          {edit ? " · changes save on Enter or when you leave a field; Esc undoes what you typed" : ""}
+          {edit || results ? " · changes save on Enter or when you leave a field; Esc undoes what you typed" : ""}
         </p>
         <SignOutButton variant="link" />
       </div>
