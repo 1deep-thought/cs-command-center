@@ -2,7 +2,7 @@
 
 import Script from "next/script";
 import { useRouter } from "next/navigation";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type GoogleId = {
   initialize(config: { client_id: string; callback: (r: { credential: string }) => void }): void;
@@ -24,8 +24,23 @@ const LINK =
   "text-[11px] leading-4 text-zinc-500 underline decoration-zinc-300 underline-offset-2 hover:text-zinc-800 focus-visible:outline-2 focus-visible:outline-zinc-400 disabled:opacity-50 dark:text-zinc-400 dark:decoration-zinc-600 dark:hover:text-zinc-200";
 const ERROR = "mt-2 text-xs text-rose-600 dark:text-rose-400";
 
-export function SignInCard({ expired = false }: { expired?: boolean }) {
+export function SignInCard({
+  expired = false,
+  message,
+  onSignedIn,
+}: {
+  expired?: boolean;
+  /** Replaces the default line under the heading. */
+  message?: string;
+  /** Called after a successful sign-in INSTEAD of refreshing the page (used to resume paused saves). */
+  onSignedIn?: () => void;
+}) {
   const router = useRouter();
+  // The Google callback is registered once; read the latest handler through a ref.
+  const signedInRef = useRef(onSignedIn);
+  useEffect(() => {
+    signedInRef.current = onSignedIn;
+  }, [onSignedIn]);
   const buttonRef = useRef<HTMLDivElement>(null);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -43,8 +58,10 @@ export function SignInCard({ expired = false }: { expired?: boolean }) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ credential }),
           });
-          if (res.ok) router.refresh();
-          else if (res.status === 400) setError("That sign-in expired. Try again.");
+          if (res.ok) {
+            if (signedInRef.current) signedInRef.current();
+            else router.refresh();
+          } else if (res.status === 400) setError("That sign-in expired. Try again.");
           else setError("Sign-in failed. Try again.");
         } catch {
           setError("Couldn't reach the server. Check your connection and try again.");
@@ -61,9 +78,10 @@ export function SignInCard({ expired = false }: { expired?: boolean }) {
         {expired ? "Session expired" : "Sign in"}
       </p>
       <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-        {expired
-          ? "Sign in again to keep viewing customer health and renewals."
-          : "Use your Delphina Google account to view customer health and renewals."}
+        {message ??
+          (expired
+            ? "Sign in again to carry on where you left off."
+            : "Use your Delphina Google account to open CS Command Center.")}
       </p>
       {CLIENT_ID ? (
         <>

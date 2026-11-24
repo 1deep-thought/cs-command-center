@@ -24,6 +24,11 @@ Domain = Annotated[
 Currency = Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")]
 AccountId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]
 Threshold = Annotated[int, Field(ge=1, le=100)]
+Email = Annotated[
+    str,
+    BeforeValidator(lambda v: v.strip().lower() if isinstance(v, str) else v),
+    StringConstraints(max_length=254, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$"),
+]
 
 
 class Strict(BaseModel):
@@ -55,12 +60,13 @@ PATCHABLE_FIELDS: tuple[str, ...] = (
     "prospect_name",
     "prospect_domain",
     "account_id",
+    "owner_email",
     "start_date",
     "end_date",
     "go_threshold",
     "no_go_threshold",
 )
-NON_NULLABLE_FIELDS = frozenset({"title", "prospect_name"})
+NON_NULLABLE_FIELDS = frozenset({"title", "prospect_name", "owner_email"})
 
 
 class PovPatch(Strict):
@@ -73,6 +79,7 @@ class PovPatch(Strict):
     prospect_name: Name | None = None
     prospect_domain: Domain | None = None
     account_id: AccountId | None = None
+    owner_email: Email | None = None
     start_date: date | None = None
     end_date: date | None = None
     go_threshold: Threshold | None = None

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Callable
 from typing import Literal, Protocol
 from uuid import UUID, uuid4
 
 from .pov_models import PovCreate, PovListItem, PovOwnerView, PovPatch
-from .pov_rules import invalid_changes, plan_is_editable
+from .pov_rules import invalid_changes, patch_is_frozen
 
 
 class PovRepo(Protocol):
@@ -31,7 +32,7 @@ class PovRepo(Protocol):
 
 @dataclass(frozen=True)
 class PatchResult:
-    kind: Literal["applied", "not_found", "frozen", "conflict", "invalid"]
+    kind: Literal["applied", "not_found", "frozen", "conflict", "invalid", "forbidden"]
     pov: PovOwnerView | None = None
     code: str | None = None
 
@@ -56,7 +57,17 @@ def get_pov(repo: PovRepo, pov_id: str) -> PovOwnerView | None:
     return repo.get(pov_id)
 
 
-def patch_pov(repo: PovRepo, pov_id: str, patch: PovPatch, actor: str) -> PatchResult:
+def patch_pov(
+    repo: PovRepo,
+    pov_id: str,
+    patch: PovPatch,
+    actor: str,
+    *,
+    is_admin: bool = False,
+    is_staff: Callable[[str], bool] | None = None,
+) -> PatchResult:
+    """`is_staff(email)` says whether that person may use the app; it is asked only when the
+    owner changes. Without it an owner change is refused (fail closed)."""
     current = repo.get(pov_id)
     if current is None:
         return PatchResult("not_found")
@@ -65,12 +76,24 @@ def patch_pov(repo: PovRepo, pov_id: str, patch: PovPatch, actor: str) -> PatchR
     if repo.op_applied(pov_id, patch.op_id):
         return PatchResult("applied", current)
 
-    if not plan_is_editable(current.status):
+    changes = patch.changes()
+    if patch_is_frozen(current.status, set(changes)):
         return PatchResult("frozen", current)
+
+    new_owner = changes.get("owner_email")
+    if isinstance(new_owner, str) and new_owner == current.owner_email.strip().lower():
+        del changes["owner_email"]  # no change: not a handover
+        if not changes:
+            return PatchResult("applied", current)
+    elif isinstance(new_owner, str):
+        # Only the owner or an admin hands a plan over, and only to someone who can sign in.
+        if not is_admin and actor.strip().lower() != current.owner_email.strip().lower():
+            return PatchResult("forbidden", current, code="owner_only")
+        if is_staff is None or not is_staff(new_owner):
+            return PatchResult("invalid", current, code="owner_not_staff")
+
     if current.version != patch.base_version:
         return PatchResult("conflict", current)
-
-    changes = patch.changes()
     error = invalid_changes(
         current_start=current.start_date,
         current_end=current.end_date,

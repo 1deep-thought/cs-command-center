@@ -5,6 +5,7 @@ import { useId, useRef, useState, type ReactNode } from "react";
 import { HEADER_ROW } from "@/components/renewals/layout";
 import type { PovOwnerView, Readiness, ReadinessProblem } from "@/types/pov";
 import { CHECK_LABEL, DECISION_LABEL, DECISION_TEXT, PROBLEM_FALLBACK, PROBLEM_TEXT, STATUS_LABEL, STATUS_ORDER } from "./labels";
+import { PlanDetails, type AccountOption } from "./plan-details";
 import { BAD, BUTTON, INPUT, LINK, MUTED, PILL, PRIMARY, STEPPER, STICKY_HEAD, TONE_GOOD, TONE_WARN, WARN, rowId } from "./layout";
 
 type Action = "start" | "agree" | "lock";
@@ -34,7 +35,10 @@ export function PlanHeader({
   names,
   stale,
   saving,
+  accounts,
   onChanged,
+  onDetails,
+  onAuthNeeded,
   children,
 }: {
   pov: PovOwnerView;
@@ -45,6 +49,12 @@ export function PlanHeader({
   stale: boolean;
   /** How many changes are waiting to be saved. */
   saving: number;
+  /** Customer accounts for the account picker, or null when they couldn't be read. */
+  accounts: AccountOption[] | null;
+  /** Save a change to the plan's own details (title, prospect, account, owner). */
+  onDetails: (changes: Record<string, unknown>) => void;
+  /** A request found the session expired: the page shows sign-in in place. */
+  onAuthNeeded: () => void;
   /** Called after the plan's status or agreement changed, to re-read it. */
   onChanged: () => void | Promise<void>;
   children?: ReactNode;
@@ -64,6 +74,8 @@ export function PlanHeader({
   const [go, setGo] = useState(String(pov.go_threshold ?? 80));
   const [noGo, setNoGo] = useState(String(pov.no_go_threshold ?? 60));
   const [settling, setSettling] = useState(false);
+  const [details, setDetails] = useState(false);
+  const accountName = pov.account_id ? accounts?.find((a) => a.account_id === pov.account_id)?.account_name : undefined;
 
   const frozen = pov.status === "locked" || pov.status === "decided";
   const failing = readiness.checks.filter((c) => !c.ok);
@@ -154,7 +166,8 @@ export function PlanHeader({
       } else if (res.status === 403) {
         setNotice({ text: "Only the plan owner can do this.", tone: "bad" });
       } else if (res.status === 401) {
-        setNotice({ text: "Your session expired. Reload the page to sign in again.", tone: "bad" });
+        onAuthNeeded();
+        setNotice({ text: "Your session expired. Sign in below, then try again.", tone: "bad" });
       } else {
         setNotice({ text: "Couldn't confirm the save. Try again; retrying is safe.", tone: "bad" });
       }
@@ -190,10 +203,18 @@ export function PlanHeader({
           </h1>
           <span className={`truncate text-xs ${MUTED}`}>{pov.prospect_name}</span>
           {pov.account_id && /^acct_[A-Za-z0-9_-]{1,64}$/.test(pov.account_id) ? (
-            <a href={`/#/account/${pov.account_id}`} className={`text-xs whitespace-nowrap ${LINK}`}>
-              Customer account ↗
+            <a href={`/#/account/${pov.account_id}`} className={`max-w-[28ch] truncate text-xs ${LINK}`}>
+              {accountName ? `Customer: ${accountName}` : "Customer account"}
             </a>
           ) : null}
+          <button
+            type="button"
+            aria-expanded={details}
+            onClick={() => setDetails((v) => !v)}
+            className={`text-xs whitespace-nowrap ${LINK}`}
+          >
+            {details ? "Close details" : "Edit details"}
+          </button>
         </div>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           {slow ? (
@@ -306,6 +327,9 @@ export function PlanHeader({
         </p>
       ) : null}
       {children}
+      {details ? (
+        <PlanDetails pov={pov} accounts={accounts} frozen={frozen} onSave={onDetails} onClose={() => setDetails(false)} />
+      ) : null}
       {action === "agree" && !notice && !stale ? (
         <p className={`mt-1.5 text-right text-xs ${MUTED}`}>
           Record this once the Sponsor has agreed to the plan as it stands. Any edit afterwards needs it recorded again.

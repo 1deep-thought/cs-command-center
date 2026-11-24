@@ -27,6 +27,9 @@ export interface PovPatch {
   prospect_name?: string;
   prospect_domain?: string | null;
   account_id?: string | null;
+  /** Hand the plan over. Only the owner or an admin; the new owner must have app access.
+   * `account_id` and `owner_email` may change at any status; everything else only until lock. */
+  owner_email?: string;
   start_date?: string | null;
   end_date?: string | null;
   /** 1 to 100; must be strictly greater than no_go_threshold when both are set. */

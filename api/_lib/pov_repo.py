@@ -46,6 +46,7 @@ FIELD_TYPES: dict[str, str] = {
     "prospect_name": "STRING",
     "prospect_domain": "STRING",
     "account_id": "STRING",
+    "owner_email": "STRING",
     "start_date": "DATE",
     "end_date": "DATE",
     "go_threshold": "INT64",

@@ -1,16 +1,17 @@
 "use client";
 
-import { SignOutButton } from "@/components/auth/sign-in";
+import { SignInCard, SignOutButton } from "@/components/auth/sign-in";
 import type { PlanView } from "@/types/pov-items";
 import type { ReadinessKey } from "@/types/pov";
 import { BAD, BUTTON, MUTED, SECTIONS } from "./layout";
+import type { AccountOption } from "./plan-details";
 import { PlanHeader } from "./plan-header";
 import { Criteria, LockedBanner, PainPoints, Stakeholders, Summary, Timeline, type SectionState } from "./sections";
 import { usePlanStore } from "./use-plan-store";
 
 /** The plan page body. Holds the plan in the browser so edits show at once and save in the background. */
-export function PlanClient({ plan: initial }: { plan: PlanView }) {
-  const { plan, pending, syncing, notice, dismiss, editor, resync } = usePlanStore(initial);
+export function PlanClient({ plan: initial, accounts }: { plan: PlanView; accounts: AccountOption[] | null }) {
+  const { plan, pending, syncing, notice, dismiss, editor, resync, authNeeded, needAuth, signedIn } = usePlanStore(initial);
   const { pov, pain_points, stakeholders, criteria, milestones, links, readiness } = plan;
   const edit = pov.status === "draft" || pov.status === "collaborating" ? editor : null;
 
@@ -32,7 +33,10 @@ export function PlanClient({ plan: initial }: { plan: PlanView }) {
         names={names}
         stale={stale}
         saving={pending}
+        accounts={accounts}
         onChanged={resync}
+        onDetails={editor.patchPov}
+        onAuthNeeded={needAuth}
       >
         {notice ? (
           <p role="alert" className={`mt-1.5 flex items-center justify-end gap-2 text-xs ${BAD}`}>
@@ -43,6 +47,19 @@ export function PlanClient({ plan: initial }: { plan: PlanView }) {
           </p>
         ) : null}
       </PlanHeader>
+      {authNeeded ? (
+        <div role="alert">
+          <SignInCard
+            expired
+            message={
+              pending > 0
+                ? `Nothing is lost. Sign in again and your ${pending === 1 ? "change" : `${pending} changes`} will be saved.`
+                : "Sign in again to carry on. Nothing was lost."
+            }
+            onSignedIn={signedIn}
+          />
+        </div>
+      ) : null}
       <LockedBanner pov={pov} />
       <Summary plan={plan} />
       {/* Value, then proof, then who signs, then when: the order the conversation runs in. */}

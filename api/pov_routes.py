@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path
@@ -35,6 +36,20 @@ def get_repo() -> PovRepo:
 Repo = Annotated[PovRepo, Depends(get_repo)]
 
 
+def get_staff_check() -> Callable[[str], bool]:
+    """Overridden in tests. Says whether an email belongs to someone allowed into the app."""
+    from api._lib.auth import _lookup_vendor_user  # lazy: needs BigQuery
+
+    def is_staff(email: str) -> bool:
+        row = _lookup_vendor_user(email)
+        return row is not None and row.is_delphina is True
+
+    return is_staff
+
+
+StaffCheck = Annotated[Callable[[str], bool], Depends(get_staff_check)]
+
+
 @router.post("", response_model=PovOwnerView, status_code=201)
 def create(body: PovCreate, staff: Staff, repo: Repo) -> PovOwnerView:
     return create_pov(repo, body, staff.email)
@@ -58,10 +73,12 @@ def read(pov_id: PovId, repo: Repo) -> PovOwnerView:
     response_model=PovOwnerView,
     responses={409: {"model": PovConflict}},
 )
-def update(pov_id: PovId, body: PovPatch, staff: Staff, repo: Repo):
-    result = patch_pov(repo, pov_id, body, staff.email)
+def update(pov_id: PovId, body: PovPatch, staff: Staff, repo: Repo, is_staff: StaffCheck):
+    result = patch_pov(repo, pov_id, body, staff.email, is_admin=staff.is_admin, is_staff=is_staff)
     if result.kind == "not_found":
         raise HTTPException(status_code=404, detail="pov_not_found")
+    if result.kind == "forbidden":
+        raise HTTPException(status_code=403, detail=result.code)
     if result.kind == "invalid":
         raise HTTPException(status_code=422, detail=result.code)
     assert result.pov is not None

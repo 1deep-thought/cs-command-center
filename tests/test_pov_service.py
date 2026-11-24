@@ -171,3 +171,56 @@ def test_create_with_same_op_id_is_idempotent(repo):
     again = create_pov(repo, PovCreate(op_id=op, title="T", prospect_name="A"), "a@delphina.example")
     assert first.pov_id == again.pov_id == str(op)
     assert len(repo.rows) == 1
+
+
+# ------------------------------------------------------------------ account link and handover
+
+STAFF = {"a@delphina.example", "b@delphina.example"}
+
+
+def is_staff(email):
+    return email in STAFF
+
+
+@pytest.mark.parametrize("status", ["locked", "decided"])
+def test_account_link_and_owner_may_change_after_lock(repo, pov, status):
+    repo.rows[pov.pov_id] = pov.model_copy(update={"status": status})
+    r = patch_pov(repo, pov.pov_id, patch(account_id="acct_123"), "b@delphina.example")
+    assert r.kind == "applied" and r.pov.account_id == "acct_123"
+    r = patch_pov(repo, pov.pov_id, patch(base_version=2, owner_email="b@delphina.example"), "a@delphina.example", is_staff=is_staff)
+    assert r.kind == "applied" and r.pov.owner_email == "b@delphina.example"
+    # ...but a plan field sent alongside is still refused.
+    mixed = patch(base_version=3, account_id="acct_9", title="Nope")
+    assert patch_pov(repo, pov.pov_id, mixed, "b@delphina.example").kind == "frozen"
+
+
+def test_only_owner_or_admin_hands_a_plan_over(repo, pov):
+    hand = lambda: patch(owner_email="b@delphina.example")  # noqa: E731
+    r = patch_pov(repo, pov.pov_id, hand(), "b@delphina.example", is_staff=is_staff)
+    assert (r.kind, r.code) == ("forbidden", "owner_only")
+    assert repo.rows[pov.pov_id].owner_email == "a@delphina.example"
+    r = patch_pov(repo, pov.pov_id, hand(), "b@delphina.example", is_admin=True, is_staff=is_staff)
+    assert r.kind == "applied" and r.pov.owner_email == "b@delphina.example"
+
+
+def test_new_owner_must_have_access(repo, pov):
+    r = patch_pov(repo, pov.pov_id, patch(owner_email="Stranger@Example.com"), "a@delphina.example", is_staff=is_staff)
+    assert (r.kind, r.code) == ("invalid", "owner_not_staff")
+    # No way to check access: refuse, never guess.
+    r = patch_pov(repo, pov.pov_id, patch(owner_email="b@delphina.example"), "a@delphina.example")
+    assert (r.kind, r.code) == ("invalid", "owner_not_staff")
+
+
+def test_same_owner_is_not_a_handover(repo, pov):
+    # Anyone may send the unchanged owner along with another field (the details form does).
+    r = patch_pov(repo, pov.pov_id, patch(title="Renamed", owner_email="A@delphina.example"), "b@delphina.example")
+    assert r.kind == "applied" and r.pov.title == "Renamed" and r.pov.owner_email == "a@delphina.example"
+    only = patch_pov(repo, pov.pov_id, patch(base_version=2, owner_email="a@delphina.example"), "b@delphina.example")
+    assert only.kind == "applied" and only.pov.version == 2  # nothing written
+
+
+def test_owner_cannot_be_cleared():
+    with pytest.raises(ValidationError):
+        PovPatch(base_version=1, op_id=uuid4(), owner_email=None)
+    with pytest.raises(ValidationError):
+        PovPatch(base_version=1, op_id=uuid4(), owner_email="not-an-email")

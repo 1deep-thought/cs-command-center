@@ -14,8 +14,18 @@ from .pov_milestone_rules import invalid_milestone_dates
 EDITABLE_STATUSES: Final = frozenset({"draft", "collaborating"})
 
 
+# Not part of what the Sponsor agreed to: who owns the plan and which customer account it
+# belongs to. These may change at any status (handover happens after the decision).
+ADMIN_FIELDS: Final = frozenset({"account_id", "owner_email"})
+
+
 def plan_is_editable(status: str) -> bool:
     return status in EDITABLE_STATUSES
+
+
+def patch_is_frozen(status: str, fields: set[str]) -> bool:
+    """A locked or decided plan accepts only ADMIN_FIELDS."""
+    return not plan_is_editable(status) and not fields <= ADMIN_FIELDS
 
 
 def invalid_changes(

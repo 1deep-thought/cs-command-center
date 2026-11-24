@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { PovOwnerView } from "@/types/pov";
 import type { PlanView } from "@/types/pov-items";
 
 // Optimistic editing for one plan. A change shows at once and is saved in the background.
@@ -8,6 +9,8 @@ import type { PlanView } from "@/types/pov-items";
 // overlapping saves would collide. Edits to a row that is still waiting to be sent are merged
 // into one request. If a save is refused, the changes still waiting are dropped and the plan is
 // re-read from the server, so the page never shows something that was not saved.
+// The one exception is an expired session: saving pauses with every change kept, and carries on
+// once the person has signed in again.
 
 export type Kind = "pain_point" | "stakeholder" | "criterion" | "milestone";
 type Fields = Record<string, unknown>;
@@ -40,6 +43,8 @@ export interface Editor {
   remove(kind: Kind, id: string): void;
   link(criterionId: string, painPointId: string): void;
   unlink(criterionId: string, painPointId: string): void;
+  /** Change the plan's own details (title, prospect, linked account, owner). */
+  patchPov(changes: Fields): void;
   warn(text: string): void;
 }
 
@@ -50,17 +55,19 @@ const RULE_TEXT: Record<string, string> = {
   invalid_exercise_length: "Kickoff to decision must be 14 to 60 days.",
   invalid_value_range: "A value needs both a low and a high figure, with high at least as large as low.",
   verification_needs_value_and_basis: "To verify a value, give it a range and say what it is based on.",
+  owner_not_staff: "That person doesn't have access to CS Command Center yet, so they can't own a plan.",
 };
 const CONFLICT_TEXT: Record<string, string> = {
   version_conflict: "someone else changed it first. Their version is shown now.",
   plan_frozen: "the plan is locked.",
+  owner_only: "only the plan's owner or an admin can hand it over.",
   limit_reached: "this plan already has the maximum number.",
   duplicate_kind: "that date is already set.",
 };
 
 async function refusal(res: Response): Promise<string> {
   const data = (await res.json().catch(() => null)) as Fields | null;
-  if (res.status === 401) return "your session expired. Reload the page to sign in again.";
+  if (res.status === 403) return data?.detail === "owner_only" ? CONFLICT_TEXT.owner_only : "this account isn't allowed to change it.";
   if (res.status === 409 && typeof data?.code === "string") return CONFLICT_TEXT[data.code] ?? "it conflicts with the saved plan.";
   if (res.status === 422) return typeof data?.detail === "string" ? (RULE_TEXT[data.detail] ?? "that value isn't allowed.") : "that value isn't allowed.";
   if (res.status === 404) return "that row no longer exists.";
@@ -78,6 +85,7 @@ export function usePlanStore(initial: PlanView) {
   const [pending, setPending] = useState(0);
   const [syncing, setSyncing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [authNeeded, setAuthNeeded] = useState(false);
 
   const planRef = useRef(initial);
   const queue = useRef<Op[]>([]);
@@ -85,6 +93,13 @@ export function usePlanStore(initial: PlanView) {
   const edits = useRef(0);
   const versions = useRef(new Map<string, number>());
   const syncs = useRef(0);
+  const povVersion = useRef(initial.pov.version);
+  const paused = useRef(false); // session expired: nothing is sent until the person signs in again
+
+  const needAuth = useCallback(() => {
+    paused.current = true;
+    setAuthNeeded(true);
+  }, []);
 
   const update = useCallback((fn: (plan: PlanView) => PlanView) => {
     planRef.current = fn(planRef.current);
@@ -107,6 +122,7 @@ export function usePlanStore(initial: PlanView) {
             // (Then the save queue is running, and it re-reads the plan again when it drains.)
             if (edits.current === stamp && queue.current.length === 0) {
               versions.current.clear();
+              povVersion.current = fresh.pov.version;
               planRef.current = fresh;
               setPlan(fresh);
             }
@@ -116,7 +132,7 @@ export function usePlanStore(initial: PlanView) {
           // Network error: try again below.
         }
         if (status === 401) {
-          setNotice("Your session expired. Reload the page to sign in again.");
+          needAuth();
           return;
         }
         if (attempt < RESYNC_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
@@ -126,10 +142,10 @@ export function usePlanStore(initial: PlanView) {
       syncs.current -= 1;
       if (syncs.current === 0) setSyncing(false); // overlapping re-reads: wait for the last one
     }
-  }, [povId]);
+  }, [povId, needAuth]);
 
   const run = useCallback(async () => {
-    if (running.current) return;
+    if (running.current || paused.current) return;
     running.current = true;
     const version = (id: string) => {
       const known = versions.current.get(id);
@@ -156,6 +172,11 @@ export function usePlanStore(initial: PlanView) {
         if (res.ok) {
           saved = true;
           data = res.status === 204 ? null : await res.json().catch(() => null);
+        } else if (res.status === 401) {
+          // Not saved and not refused: keep this change and everything behind it, and wait.
+          op.inFlight = false;
+          needAuth();
+          break;
         } else {
           failure = await refusal(res);
         }
@@ -184,8 +205,16 @@ export function usePlanStore(initial: PlanView) {
       setPending(queue.current.length);
     }
     running.current = false;
+    if (paused.current) return;
     await resync(); // readiness, the change counter and anything a colleague changed
-  }, [povId, resync, update]);
+  }, [povId, resync, update, needAuth]);
+
+  /** The person signed in again: send what was waiting (or just re-read the plan). */
+  const signedIn = useCallback(() => {
+    paused.current = false;
+    setAuthNeeded(false);
+    void run();
+  }, [run]);
 
   const enqueue = useCallback(
     (op: Op) => {
@@ -304,9 +333,27 @@ export function usePlanStore(initial: PlanView) {
           request: () => ({ method: "DELETE", path: `/criteria/${criterionId}/pain-points/${painPointId}?op_id=${opId}` }),
         });
       },
+      patchPov(changes) {
+        update((p) => ({ ...p, pov: { ...p.pov, ...changes } }));
+        const merged: Fields = { ...changes };
+        enqueue({
+          key: "patch:pov",
+          what: "the plan details",
+          changes: merged,
+          local: { ...changes },
+          // The plan's own version: saves run one at a time, so this is the latest by then.
+          request: () => ({ method: "PATCH", path: "", body: { ...merged, base_version: povVersion.current, op_id: crypto.randomUUID() } }),
+          applied: (p, data, overlay) => {
+            const server = data as PovOwnerView | null;
+            if (!server) return p;
+            povVersion.current = server.version;
+            return { ...p, pov: { ...server, ...overlay } };
+          },
+        });
+      },
       warn: (text) => setNotice(text),
     };
   });
 
-  return { plan, pending, syncing, notice, dismiss: () => setNotice(null), editor, resync };
+  return { plan, pending, syncing, notice, dismiss: () => setNotice(null), editor, resync, authNeeded, needAuth, signedIn };
 }

@@ -91,3 +91,19 @@ def test_store_not_configured_is_503(monkeypatch):
         assert TestClient(app).get("/api/py/pov").status_code == 503
     finally:
         app.dependency_overrides.clear()
+
+
+def test_handover_needs_owner_and_a_person_with_access(client):
+    from api.pov_routes import get_staff_check
+
+    c, _ = client
+    app.dependency_overrides[get_staff_check] = lambda: (lambda email: email == "b@delphina.example")
+    pov = create(c).json()
+    url = f"/api/py/pov/{pov['pov_id']}"
+    r = c.patch(url, json={"base_version": 1, "op_id": str(uuid4()), "owner_email": "nobody@example.com"})
+    assert r.status_code == 422 and r.json()["detail"] == "owner_not_staff"
+    r = c.patch(url, json={"base_version": 1, "op_id": str(uuid4()), "owner_email": "B@delphina.example"})
+    assert r.status_code == 200 and r.json()["owner_email"] == "b@delphina.example"
+    # No longer the owner, and not an admin: cannot take it back.
+    r = c.patch(url, json={"base_version": 2, "op_id": str(uuid4()), "owner_email": "a@delphina.example"})
+    assert r.status_code == 403 and r.json()["detail"] == "owner_only"
