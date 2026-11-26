@@ -17,6 +17,8 @@ class FakeRepo:
     def __init__(self):
         self.rows: dict[str, PovOwnerView] = {}
         self.ops: set = set()
+        self.members: dict[str, list[dict]] = {}  # pov_id -> live pov_member rows
+        self.team_log: list[tuple] = []
         self.race_next = False  # simulate another writer winning between read and write
         self.race_is_twin = False  # ...and that writer being a retry of this very operation
 
@@ -35,6 +37,19 @@ class FakeRepo:
 
     def list(self) -> list[PovListItem]:
         return []
+
+    def team(self, pov_id):
+        row = self.rows.get(pov_id)
+        return None if row is None else {"owner_email": row.owner_email, "members": list(self.members.get(pov_id, []))}
+
+    def write_team(self, *, pov_id, changes, actor, op_id):
+        for role, (old, email) in sorted(changes.items()):
+            kept = [m for m in self.members.get(pov_id, []) if m["role"] != role]
+            self.members[pov_id] = kept + ([{"email": email, "role": role}] if email else [])
+            self.team_log.append((role, old, email, actor))
+
+    def staff(self):
+        return [{"email": "a@delphina.example"}, {"email": "b@delphina.example"}]
 
     def op_applied(self, pov_id, op_id):
         return (pov_id, op_id) in self.ops

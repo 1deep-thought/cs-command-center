@@ -17,7 +17,8 @@ BASE = "/api/py/pov/p1"
 @pytest.fixture
 def client():
     repo = FakeItems()
-    app.dependency_overrides[require_delphina] = lambda: Principal(email="a@delphina.example", is_admin=False)
+    # The plan's owner (nobody is assigned yet, so the owner is who may edit it).
+    app.dependency_overrides[require_delphina] = lambda: Principal(email="o@x", is_admin=False)
     app.dependency_overrides[get_item_repo] = lambda: repo
     yield TestClient(app), repo
     app.dependency_overrides.clear()

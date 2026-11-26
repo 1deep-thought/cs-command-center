@@ -3,8 +3,8 @@
 import Link from "next/link";
 import { useId, useRef, useState, type ReactNode } from "react";
 import { HEADER_ROW } from "@/components/renewals/layout";
-import type { PovDecision, PovOwnerView, Readiness, ReadinessProblem } from "@/types/pov";
-import { planScore, suggestedDecision } from "./format";
+import type { PovDecision, PovOwnerView, Readiness, ReadinessProblem, Team } from "@/types/pov";
+import { localPart, planScore, suggestedDecision } from "./format";
 import { CHECK_LABEL, DECISION_BADGE, DECISION_LABEL, DECISION_TEXT, PROBLEM_FALLBACK, PROBLEM_TEXT, STATUS_LABEL, STATUS_ORDER } from "./labels";
 import { PlanDetails, type AccountOption } from "./plan-details";
 import { BAD, BUTTON, INPUT, LINK, MUTED, PILL, PRIMARY, STEPPER, STICKY_HEAD, TONE_GOOD, TONE_WARN, WARN, rowId } from "./layout";
@@ -40,6 +40,8 @@ export function PlanHeader({
   saving,
   accounts,
   criteria,
+  team,
+  onTeam,
   onChanged,
   onDetails,
   onAuthNeeded,
@@ -57,6 +59,9 @@ export function PlanHeader({
   accounts: AccountOption[] | null | undefined;
   /** The plan's criteria: their results give the score a decision is recorded against. */
   criteria: { weight_pct: number; score: number | null }[];
+  /** The assigned Account Executive and Solution Engineer. */
+  team: Team;
+  onTeam: (changes: Partial<Team>) => void;
   /** Save a change to the plan's own details (title, prospect, account, owner). */
   onDetails: (changes: Record<string, unknown>) => void;
   /** A request found the session expired: the page shows sign-in in place. */
@@ -238,15 +243,20 @@ export function PlanHeader({
               {accountName ? `Customer: ${accountName}` : "Customer account"}
             </a>
           ) : null}
-          <button
-            ref={detailsRef}
-            type="button"
-            aria-expanded={details}
-            onClick={() => setDetails((v) => !v)}
-            className={`text-xs whitespace-nowrap ${LINK}`}
-          >
-            {details ? "Close details" : "Edit details"}
-          </button>
+          <span className={`truncate text-xs ${MUTED}`}>
+            Account Executive {team.ae ? localPart(team.ae) : "not assigned"} · Solution Engineer {team.se ? localPart(team.se) : "not assigned"}
+          </span>
+          {readiness.is_owner ? (
+            <button
+              ref={detailsRef}
+              type="button"
+              aria-expanded={details}
+              onClick={() => setDetails((v) => !v)}
+              className={`text-xs whitespace-nowrap ${LINK}`}
+            >
+              {details ? "Close details" : "Edit details"}
+            </button>
+          ) : null}
         </div>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           {slow ? (
@@ -404,8 +414,8 @@ export function PlanHeader({
         </p>
       ) : null}
       {children}
-      {details ? (
-        <PlanDetails pov={pov} accounts={accounts} frozen={frozen} onSave={onDetails} onClose={closeDetails} />
+      {details && readiness.is_owner ? (
+        <PlanDetails pov={pov} team={team} accounts={accounts} frozen={frozen} onSave={onDetails} onTeam={onTeam} onClose={closeDetails} />
       ) : null}
       {action === "agree" && !notice && !stale ? (
         <p className={`mt-1.5 text-right text-xs ${MUTED}`}>

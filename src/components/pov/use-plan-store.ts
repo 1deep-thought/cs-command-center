@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { PovOwnerView } from "@/types/pov";
+import type { PovOwnerView, Team } from "@/types/pov";
 import type { PlanView } from "@/types/pov-items";
 
 // Optimistic editing for one plan. A change shows at once and is saved in the background.
@@ -46,6 +46,9 @@ export interface Editor {
   unlink(criterionId: string, painPointId: string): void;
   /** Change the plan's own details (title, prospect, linked account, owner). */
   patchPov(changes: Fields): void;
+  /** Assign (or, with null, clear) the plan's Account Executive, Solution Engineer, or both.
+   * Both go in one request: the first change may end this person's right to make the second. */
+  setTeam(changes: Partial<Team>): void;
   warn(text: string): void;
 }
 
@@ -58,6 +61,7 @@ const RULE_TEXT: Record<string, string> = {
   verification_needs_value_and_basis: "To verify a value, give it a range and say what it is based on.",
   results_need_locked_plan: "Results are entered once the plan is locked.",
   results_separately: "Results are saved on their own, not together with changes to the plan.",
+  not_staff: "That person doesn't have access to CS Command Center yet, so they can't be assigned.",
   owner_not_staff: "That person doesn't have access to CS Command Center yet, so they can't own a plan.",
 };
 const CONFLICT_TEXT: Record<string, string> = {
@@ -70,7 +74,11 @@ const CONFLICT_TEXT: Record<string, string> = {
 
 async function refusal(res: Response): Promise<string> {
   const data = (await res.json().catch(() => null)) as Fields | null;
-  if (res.status === 403) return data?.detail === "owner_only" ? CONFLICT_TEXT.owner_only : "this account isn't allowed to change it.";
+  if (res.status === 403) {
+    if (data?.detail === "owner_only") return CONFLICT_TEXT.owner_only;
+    if (data?.detail === "not_assigned") return "only the plan's Account Executive, Solution Engineer or an admin can change it.";
+    return "this account isn't allowed to change it.";
+  }
   if (res.status === 409 && typeof data?.code === "string") return CONFLICT_TEXT[data.code] ?? "it conflicts with the saved plan.";
   if (res.status === 422) return typeof data?.detail === "string" ? (RULE_TEXT[data.detail] ?? "that value isn't allowed.") : "that value isn't allowed.";
   if (res.status === 404) return "that row no longer exists.";
@@ -364,6 +372,16 @@ export function usePlanStore(initial: PlanView) {
             povVersion.current = server.version;
             return { ...p, pov: { ...server, ...overlay } };
           },
+        });
+      },
+      setTeam(changes) {
+        update((p) => ({ ...p, team: { ...p.team, ...changes } }));
+        const opId = crypto.randomUUID(); // one id for every retry of this assignment
+        enqueue({
+          key: `team:${opId}`,
+          what: "the plan's team",
+          request: () => ({ method: "POST", path: "/team", body: { ...changes, op_id: opId } }),
+          applied: (p, data) => (data ? { ...p, team: data as Team } : p),
         });
       },
       warn: (text) => setNotice(text),

@@ -8,7 +8,7 @@ from typing import Literal
 from .pov_bigquery import pov_table
 from .pov_item_repo import BigQueryItemRepo, _to_query_param
 from .pov_item_specs import CRITERION, MILESTONE, PAIN_POINT, STAKEHOLDER
-from .pov_lock_service import AGREED, AGREED_FIELD, PARTS
+from .pov_lock_service import AGREED, AGREED_FIELD, MEMBERS, PARTS
 from .pov_lock_sql import build_agreement_script, build_transition_script
 from .pov_repo import _json, _param
 
@@ -34,6 +34,11 @@ def build_parts_query() -> str:
         f"(SELECT MAX(seq) FROM `{pov_table('pov_change_log')}` WHERE pov_id = @pov_id "
         f"AND item_kind = 'pov' AND field = '{AGREED_FIELD}') AS {AGREED}"
     )
+    # Who at Delphina runs the plan (assigned Account Executive and Solution Engineer).
+    arrays.append(
+        f"ARRAY(SELECT AS STRUCT email, role FROM `{pov_table('pov_member')}` "
+        f"WHERE pov_id = @pov_id AND removed_at IS NULL ORDER BY added_at LIMIT 50) AS {MEMBERS}"
+    )
     return "SELECT\n  " + ",\n  ".join(arrays)
 
 
@@ -43,6 +48,7 @@ class BigQueryLockRepo(BigQueryItemRepo):
         row = dict(rows[0].items()) if rows else {}
         parts: dict[str, object] = {part: [dict(item) for item in row.get(part) or []] for part in PARTS}
         parts[AGREED] = row.get(AGREED)
+        parts[MEMBERS] = [dict(item) for item in row.get(MEMBERS) or []]
         return parts
 
     def write_transition(

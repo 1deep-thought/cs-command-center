@@ -49,6 +49,34 @@ def suggested_decision(score: float, go: int, no_go: int) -> str:
     return "go" if score >= go else "no_go" if score < no_go else "extend"
 
 
+TEAM_ROLES: Final = ("ae", "se")  # Account Executive, Solution Engineer
+
+
+def team_of(members: list[dict[str, object]]) -> dict[str, str | None]:
+    """The assigned Account Executive and Solution Engineer from live member rows."""
+    team: dict[str, str | None] = {role: None for role in TEAM_ROLES}
+    for m in members:
+        role, email = m.get("role"), m.get("email")
+        if role in team and isinstance(email, str) and team[role] is None:  # type: ignore[operator]
+            team[role] = email.strip().lower()  # type: ignore[index]
+    return team
+
+
+def may_edit(*, actor: str, is_admin: bool, owner_email: str, members: list[dict[str, object]]) -> bool:
+    """Who may change a PoV: an admin, or the Account Executive or Solution Engineer assigned to it.
+    Other Delphina staff read it but change nothing.
+
+    A plan nobody has been assigned to yet falls back to its owner (the person who created it),
+    so a new plan, or one from before assignments existed, is never left without an editor."""
+    if is_admin:
+        return True
+    me = actor.strip().lower()
+    assigned = [e for e in team_of(members).values() if e]
+    if assigned:
+        return me in assigned
+    return me == owner_email.strip().lower()
+
+
 def investment(
     kickoff: date | None, decision: date | None, start_date: date | None = None, end_date: date | None = None
 ) -> dict[str, object] | None:

@@ -139,9 +139,46 @@ class PovListItem(BaseModel):
     decision_date: date | None = None
     # The customer account this PoV belongs to or turned into, when known.
     account_id: str | None = None
+    # The assigned Account Executive and Solution Engineer, when set (table pov_member).
+    ae_email: str | None = None
+    se_email: str | None = None
     # Delphina's estimated investment in this PoV, in USD cents (see pov_rules.investment).
     # None until the plan has kickoff and decision dates.
     invest_minor: int | None = None
+
+
+class Team(BaseModel):
+    """Who at Delphina runs a PoV. Either may be unassigned."""
+
+    ae: str | None = None
+    se: str | None = None
+
+
+class TeamAssign(BaseModel):
+    """POST /{pov_id}/team: set the Account Executive, the Solution Engineer, or both, in one
+    request (null clears a role; a role left out is untouched). Both in one request matters:
+    the first change can remove the caller's own right to make the second."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ae: Email | None = None
+    se: Email | None = None
+    op_id: UUID
+
+    def changes(self) -> dict[str, str | None]:
+        return {role: getattr(self, role) for role in ("ae", "se") if role in self.model_fields_set}
+
+    @model_validator(mode="after")
+    def _not_empty(self) -> TeamAssign:
+        if not self.changes():
+            raise ValueError("name at least one role to change: ae or se")
+        return self
+
+
+class StaffMember(BaseModel):
+    """Someone at Delphina who can sign in. Email only: who is an admin is not for everyone."""
+
+    email: str
 
 
 class Investment(BaseModel):
@@ -194,7 +231,9 @@ class Readiness(BaseModel):
     passed: int
     total: int
     checks: list[ReadinessCheck]
-    is_owner: bool  # only the owner sees the buttons that move the plan
+    # True when the viewer may change this plan: an admin, or its assigned Account Executive or
+    # Solution Engineer (the name predates assignments, when that person was "the owner").
+    is_owner: bool
     allowed_transitions: list[TransitionTarget]
 
 

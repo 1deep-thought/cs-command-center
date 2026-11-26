@@ -39,6 +39,13 @@ export function ListFrame({ columns, children }: { columns: ListColumn[]; childr
 
 const decisionBy = (pov: PovListItem) => pov.decision_date ?? pov.end_date;
 
+/** "Mine": I am its Account Executive or Solution Engineer, or, while nobody is assigned, its owner. */
+function isMine(pov: PovListItem, viewer: string | null): boolean {
+  if (!viewer) return false;
+  if (pov.ae_email || pov.se_email) return pov.ae_email === viewer || pov.se_email === viewer;
+  return pov.owner_email.trim().toLowerCase() === viewer;
+}
+
 function order(tab: Tab, a: PovListItem, b: PovListItem): number {
   if (tab === "active") {
     // Soonest decision first; plans without a date go last.
@@ -63,7 +70,7 @@ export function PovListView({ povs, viewer }: { povs: PovListItem[]; viewer: str
 
   const rows = povs
     .filter((p) => (tab === "all" ? true : tab === "decided" ? p.status === "decided" : p.status !== "decided"))
-    .filter((p) => who === "everyone" || p.owner_email.trim().toLowerCase() === viewer)
+    .filter((p) => who === "everyone" || isMine(p, viewer))
     .sort((a, b) => order(tab, a, b));
   const [emptyTitle, emptyHint] = emptyText(tab, who);
   // One line above the table: what Delphina has riding on the plans shown.
@@ -124,8 +131,17 @@ export function PovListView({ povs, viewer }: { povs: PovListItem[]; viewer: str
               </td>
               <td className={`${CELL} tabular-nums`}>{decisionBy(pov) ? formatDate(decisionBy(pov)) : <span className={MUTED}>Not set</span>}</td>
               {who === "everyone" ? (
-                <td className={`${CELL} truncate`} title={pov.owner_email}>
-                  {localPart(pov.owner_email)}
+                <td className={`${CELL} truncate`}>
+                  {pov.ae_email || pov.se_email ? (
+                    <>
+                      <span className={MUTED}>AE</span> {pov.ae_email ? localPart(pov.ae_email) : "—"} <span className={MUTED}>· SE</span>{" "}
+                      {pov.se_email ? localPart(pov.se_email) : "—"}
+                    </>
+                  ) : (
+                    <>
+                      {localPart(pov.owner_email)} <span className={MUTED}>(owner, no team yet)</span>
+                    </>
+                  )}
                 </td>
               ) : null}
               <td className={`${CELL} text-right tabular-nums`}>

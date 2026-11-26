@@ -97,3 +97,5 @@ export const MILESTONE_LABEL: Record<MilestoneKind, string> = {
 };
 
 export const STATUS_ORDER: readonly PovStatus[] = ["draft", "collaborating", "locked", "decided"];
+
+export const TEAM_ROLE_LABEL = { ae: "Account Executive", se: "Solution Engineer" } as const;

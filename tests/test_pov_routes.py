@@ -104,9 +104,9 @@ def test_handover_needs_owner_and_a_person_with_access(client):
     assert r.status_code == 422 and r.json()["detail"] == "owner_not_staff"
     r = c.patch(url, json={"base_version": 1, "op_id": str(uuid4()), "owner_email": "B@delphina.example"})
     assert r.status_code == 200 and r.json()["owner_email"] == "b@delphina.example"
-    # No longer the owner, and not an admin: cannot take it back.
+    # No longer the owner, not assigned, and not an admin: cannot change the plan at all now.
     r = c.patch(url, json={"base_version": 2, "op_id": str(uuid4()), "owner_email": "a@delphina.example"})
-    assert r.status_code == 403 and r.json()["detail"] == "owner_only"
+    assert r.status_code == 403 and r.json()["detail"] == "not_assigned"
 
 
 def test_admin_hands_over_and_account_links_on_a_locked_plan(client):
@@ -117,6 +117,7 @@ def test_admin_hands_over_and_account_links_on_a_locked_plan(client):
     pov = create(c).json()
     url = f"/api/py/pov/{pov['pov_id']}"
     repo.rows[pov["pov_id"]] = repo.rows[pov["pov_id"]].model_copy(update={"status": "locked", "owner_email": "z@delphina.example"})
+    repo.members[pov["pov_id"]] = [{"email": "a@delphina.example", "role": "se"}]  # a is the assigned Solution Engineer
     r = c.patch(url, json={"base_version": 1, "op_id": str(uuid4()), "account_id": "acct_42"})
     assert r.status_code == 200 and r.json()["account_id"] == "acct_42" and r.json()["seq"] == pov["seq"]
     assert c.patch(url, json={"base_version": 2, "op_id": str(uuid4()), "title": "x"}).status_code == 409

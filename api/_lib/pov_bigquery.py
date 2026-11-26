@@ -35,6 +35,8 @@ POV_TABLES = frozenset(
         "guest_session",
         "pov_viewer_state",
         "vendor_user",
+        "pov_member",
+        "criterion_vote",
     }
 )
 

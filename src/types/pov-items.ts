@@ -175,4 +175,5 @@ export interface PlanView {
   readiness: import("./pov").Readiness;
   /** Null until the plan has kickoff and decision dates. Not part of `pov`: it is derived. */
   investment: import("./pov").Investment | null;
+  team: import("./pov").Team;
 }

@@ -20,7 +20,7 @@ from uuid import UUID
 from google.cloud import bigquery
 
 from .pov_bigquery import get_pov_client, pov_table
-from .pov_rules import ADMIN_FIELDS, investment
+from .pov_rules import ADMIN_FIELDS, TEAM_ROLES, investment
 from .pov_models import PATCHABLE_FIELDS, PovCreate, PovListItem, PovOwnerView
 
 BUDGET_S = 8.0  # reads: one deadline for the whole request (every query + retry), under the 10s guardrail
@@ -54,6 +54,38 @@ FIELD_TYPES: dict[str, str] = {
     "no_go_threshold": "INT64",
 }
 assert set(FIELD_TYPES) == set(PATCHABLE_FIELDS)  # a new patchable field needs a column type
+
+
+def build_team_script(
+    *, pov_id: str, changes: dict[str, tuple[str | None, str | None]], actor: str, op_id: str
+) -> tuple[str, list[bigquery.ScalarQueryParameter]]:
+    """Replace who holds one or both roles on a PoV, in one transaction. `changes` maps a role to
+    (old email, new email). Per role: retire the live row, add the new one (unless the role is
+    being cleared), and log it. Nothing is written for a PoV that is gone, or twice for the same
+    op_id (a retry after an unclear commit). The PoV's `seq` is left alone: who runs a plan is
+    not part of what the Sponsor agreed to."""
+    if not changes or not set(changes) <= set(TEAM_ROLES):
+        raise ValueError(f"unknown team roles: {sorted(changes)}")
+    pov, member, log = pov_table("pov"), pov_table("pov_member"), pov_table("pov_change_log")
+    live_pov = f"EXISTS (SELECT 1 FROM `{pov}` WHERE pov_id = @pov_id AND deleted_at IS NULL)"
+    fresh = f"NOT EXISTS (SELECT 1 FROM `{log}` WHERE pov_id = @pov_id AND op_id = @op_id)"
+    statements = ["DECLARE proceed BOOL DEFAULT FALSE;", "BEGIN TRANSACTION;", f"SET proceed = {live_pov} AND {fresh};"]
+    params = [_param("pov_id", "STRING", pov_id), _param("actor", "STRING", actor), _param("op_id", "STRING", op_id)]
+    for role in sorted(changes):  # role names come from TEAM_ROLES, never from the request
+        old, new = changes[role]
+        params += [_param(f"old_{role}", "STRING", old), _param(f"new_{role}", "STRING", new)]
+        statements += [
+            f"UPDATE `{member}` SET removed_at = CURRENT_TIMESTAMP(), removed_by = @actor "
+            f"WHERE pov_id = @pov_id AND role = '{role}' AND removed_at IS NULL AND proceed;",
+            f"INSERT INTO `{member}` (pov_id, email, role, stakeholder_id, added_by, added_at) "
+            f"SELECT @pov_id, @new_{role}, '{role}', CAST(NULL AS STRING), @actor, CURRENT_TIMESTAMP() "
+            f"FROM UNNEST([1]) WHERE proceed AND @new_{role} IS NOT NULL;",
+            f"INSERT INTO `{log}` ({LOG_COLUMNS}) "
+            f"SELECT pov_id, seq, @op_id, @actor, 'delphina', 'pov', pov_id, 'team_{role}', @old_{role}, @new_{role}, "
+            f"'all', CURRENT_TIMESTAMP() FROM `{pov}` WHERE pov_id = @pov_id AND deleted_at IS NULL AND proceed;",
+        ]
+    statements.append("COMMIT TRANSACTION;")
+    return "\n".join(statements), params
 
 
 def list_item(row: dict[str, Any]) -> PovListItem:
@@ -140,14 +172,46 @@ class BigQueryPovRepo:
         # The decision date comes from the plan's decision milestone: one grouped subquery, joined on
         # the PoV id (both tables are small and clustered on pov_id).
         rows = self._run(
-            f"SELECT {LIST_COLUMNS}, start_date, d.decision_date, d.kickoff_date FROM `{pov_table('pov')}` p "
+            f"SELECT {LIST_COLUMNS}, start_date, d.decision_date, d.kickoff_date, t.ae_email, t.se_email FROM `{pov_table('pov')}` p "
             "LEFT JOIN (SELECT pov_id, MAX(IF(kind = 'decision', due_date, NULL)) AS decision_date, "
             f"MIN(IF(kind = 'kickoff', due_date, NULL)) AS kickoff_date FROM `{pov_table('milestone')}` "
             "WHERE kind IN ('kickoff', 'decision') AND deleted_at IS NULL GROUP BY pov_id) d USING (pov_id) "
+            "LEFT JOIN (SELECT pov_id, "
+            "ARRAY_AGG(IF(role = 'ae', LOWER(email), NULL) IGNORE NULLS ORDER BY added_at LIMIT 1)[SAFE_OFFSET(0)] AS ae_email, "
+            "ARRAY_AGG(IF(role = 'se', LOWER(email), NULL) IGNORE NULLS ORDER BY added_at LIMIT 1)[SAFE_OFFSET(0)] AS se_email "
+            f"FROM `{pov_table('pov_member')}` "
+            "WHERE role IN ('ae', 'se') AND removed_at IS NULL GROUP BY pov_id) t USING (pov_id) "
             "WHERE p.deleted_at IS NULL ORDER BY updated_at DESC LIMIT 200",
             [],
         )
         return [list_item(dict(r.items())) for r in rows]
+
+    # -- team (who at Delphina runs the PoV) -----------------------------------------
+
+    def team(self, pov_id: str) -> dict[str, object] | None:
+        """The PoV's owner and its live member rows, in one job."""
+        rows = self._run(
+            f"SELECT owner_email, ARRAY(SELECT AS STRUCT email, role FROM `{pov_table('pov_member')}` "
+            "WHERE pov_id = @pov_id AND removed_at IS NULL ORDER BY added_at LIMIT 50) AS members "
+            f"FROM `{pov_table('pov')}` WHERE pov_id = @pov_id AND deleted_at IS NULL LIMIT 1",
+            [_param("pov_id", "STRING", pov_id)],
+        )
+        if not rows:
+            return None
+        return {"owner_email": rows[0]["owner_email"], "members": [dict(m) for m in rows[0]["members"] or []]}
+
+    def write_team(self, *, pov_id: str, changes: dict[str, tuple[str | None, str | None]], actor: str, op_id: str) -> None:
+        sql, params = build_team_script(pov_id=pov_id, changes=changes, actor=actor, op_id=op_id)
+        self._run(sql, params, retry=True)
+
+    def staff(self) -> list[dict[str, object]]:
+        """Everyone at Delphina who can sign in (for the Account Executive / Solution Engineer pickers)."""
+        rows = self._run(
+            f"SELECT LOWER(email) AS email FROM `{pov_table('vendor_user')}` "
+            "WHERE is_delphina = TRUE ORDER BY email LIMIT 200",
+            [],
+        )
+        return [dict(r.items()) for r in rows]
 
     def op_applied(self, pov_id: str, op_id: UUID, item_kind: str | None = None, item_id: str | None = None) -> bool:
         """Was this operation already logged? With item_kind/item_id it must have been applied to that item,

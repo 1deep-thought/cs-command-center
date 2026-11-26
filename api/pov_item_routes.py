@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse, Response
 
 from api._lib.auth import require_delphina
 from api._lib.auth_core import Principal
+from api._lib.pov_access import editor_of
 from api._lib.pov_bigquery import CREDENTIALS_ENV
 from api._lib.pov_item_service import ItemRepo, ItemResult, create_item, delete_item, list_items, patch_item
 from api._lib.pov_item_specs import SPECS, ItemSpec
@@ -47,6 +48,8 @@ def get_item_repo() -> ItemRepo:
 
 Repo = Annotated[ItemRepo, Depends(get_item_repo)]
 LinkRepoDep = Annotated[LinkRepo, Depends(get_item_repo)]  # the BigQuery repo implements both
+# Changing a plan: an admin, or its assigned Account Executive or Solution Engineer.
+Editor = Annotated[Principal, Depends(editor_of(get_item_repo))]
 
 
 def _respond(spec: ItemSpec, result: ItemResult, *, success: int = 200):
@@ -87,18 +90,18 @@ def _register(spec: ItemSpec) -> None:
         return items
 
     @router.post(base, response_model=View, status_code=201, responses=conflict, name=f"create_{spec.kind}")
-    def create(pov_id: PovId, body: Create, staff: Staff, repo: Repo):
+    def create(pov_id: PovId, body: Create, staff: Editor, repo: Repo):
         return _respond(spec, create_item(repo, spec, pov_id, body, staff.email), success=201)
 
     @router.patch(base + "/{item_id}", response_model=View, responses=conflict, name=f"update_{spec.kind}")
-    def update(pov_id: PovId, item_id: ItemId, body: Patch, staff: Staff, repo: Repo):
+    def update(pov_id: PovId, item_id: ItemId, body: Patch, staff: Editor, repo: Repo):
         return _respond(spec, patch_item(repo, spec, pov_id, item_id, body, staff.email))
 
     @router.delete(base + "/{item_id}", status_code=204, responses=conflict, name=f"delete_{spec.kind}")
     def remove(
         pov_id: PovId,
         item_id: ItemId,
-        staff: Staff,
+        staff: Editor,
         repo: Repo,
         base_version: Annotated[int, Query(ge=1)],
         op_id: Annotated[UUID, Query()],
@@ -130,7 +133,7 @@ def list_criterion_links(pov_id: PovId, repo: LinkRepoDep):
 
 
 @router.post(LINKS, response_model=CriterionLinkView, status_code=201, responses=LinkConflict, name="add_criterion_link")
-def add_criterion_link(pov_id: PovId, criterion_id: ItemId, body: CriterionLinkIn, staff: Staff, repo: LinkRepoDep):
+def add_criterion_link(pov_id: PovId, criterion_id: ItemId, body: CriterionLinkIn, staff: Editor, repo: LinkRepoDep):
     result = change_link(repo, "add", pov_id, criterion_id, body.pain_point_id, body.op_id, staff.email)
     return _link_response(result, success=201)
 
@@ -140,7 +143,7 @@ def remove_criterion_link(
     pov_id: PovId,
     criterion_id: ItemId,
     pain_point_id: ItemId,
-    staff: Staff,
+    staff: Editor,
     repo: LinkRepoDep,
     op_id: Annotated[UUID, Query()],
 ):

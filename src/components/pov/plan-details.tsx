@@ -1,25 +1,31 @@
 "use client";
 
-import { useId, useState } from "react";
-import type { PovOwnerView } from "@/types/pov";
+import { useEffect, useId, useState } from "react";
+import type { PovOwnerView, StaffMember, Team, TeamRole } from "@/types/pov";
+import { TEAM_ROLE_LABEL } from "./labels";
 import { BAD, BUTTON, INPUT, MUTED, PRIMARY } from "./layout";
 
 export type AccountOption = { account_id: string; account_name: string };
 
 const LABEL = "flex min-w-0 flex-col gap-1 text-[11px] font-medium text-zinc-500 dark:text-zinc-400";
-const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+const ROLES: readonly TeamRole[] = ["ae", "se"];
 
 /** The plan's own details: what it is called, who it is for, which customer account it became,
- * and who owns it. Title and prospect are part of the plan, so they freeze at lock; the account
- * link and the owner can change at any time. One Save sends only what changed. */
+ * and who at Delphina runs it. Title and prospect are part of the plan, so they freeze at lock;
+ * the account link and the team can change at any time. One Save sends only what changed. */
 export function PlanDetails({
   pov,
+  team,
   accounts,
   frozen,
   onSave,
+  onTeam,
   onClose,
 }: {
   pov: PovOwnerView;
+  team: Team;
+  /** Assign (or clear, with null) the Account Executive, the Solution Engineer, or both. */
+  onTeam: (changes: Partial<Team>) => void;
   /** Customer accounts to choose from: undefined while loading, null when they couldn't be read. */
   accounts: AccountOption[] | null | undefined;
   frozen: boolean;
@@ -30,8 +36,23 @@ export function PlanDetails({
   const [title, setTitle] = useState(pov.title);
   const [prospect, setProspect] = useState(pov.prospect_name);
   const [account, setAccount] = useState(pov.account_id ?? "");
-  const [owner, setOwner] = useState(pov.owner_email);
+  const [people, setPeople] = useState<Team>(team);
   const [error, setError] = useState<string | null>(null);
+
+  // Delphina people who can be assigned: undefined while loading, null if the list couldn't be read.
+  const [staff, setStaff] = useState<StaffMember[] | null | undefined>(undefined);
+  useEffect(() => {
+    let live = true;
+    fetch("/api/pov/staff", { cache: "no-store" })
+      .then((res) => (res.ok ? (res.json() as Promise<StaffMember[]>) : null))
+      .then(
+        (list) => live && setStaff(list),
+        () => live && setStaff(null),
+      );
+    return () => {
+      live = false;
+    };
+  }, []);
 
   // A link to an account that is no longer in the book still shows, so saving never drops it silently.
   const options = accounts ? [...accounts].sort((a, b) => a.account_name.localeCompare(b.account_name)) : [];
@@ -41,17 +62,17 @@ export function PlanDetails({
     const changes: Record<string, unknown> = {};
     const t = title.trim();
     const p = prospect.trim();
-    const o = owner.trim().toLowerCase();
     if (!frozen) {
       if (!t || !p) return setError("Title and prospect can't be empty.");
       if (t.length > 120 || p.length > 120) return setError("Title and prospect can be at most 120 characters.");
       if (t !== pov.title) changes.title = t;
       if (p !== pov.prospect_name) changes.prospect_name = p;
     }
-    if (!EMAIL.test(o)) return setError("Owner must be an email address.");
-    if (o !== pov.owner_email.trim().toLowerCase()) changes.owner_email = o;
     if (accounts && account !== (pov.account_id ?? "")) changes.account_id = account || null;
     if (Object.keys(changes).length > 0) onSave(changes);
+    const moved: Partial<Team> = {};
+    for (const role of ROLES) if (people[role] !== team[role]) moved[role] = people[role];
+    if (Object.keys(moved).length > 0) onTeam(moved); // one request for both roles
     onClose();
   }
 
@@ -71,7 +92,7 @@ export function PlanDetails({
         }
       }}
     >
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <label className={LABEL} htmlFor={`${id}-title`}>
           Title
           <input id={`${id}-title`} className={INPUT} value={title} maxLength={120} disabled={frozen} onChange={(e) => setTitle(e.target.value)} autoFocus={!frozen} />
@@ -92,10 +113,31 @@ export function PlanDetails({
             ))}
           </select>
         </label>
-        <label className={LABEL} htmlFor={`${id}-owner`}>
-          Owner
-          <input id={`${id}-owner`} type="email" className={INPUT} value={owner} maxLength={254} onChange={(e) => setOwner(e.target.value)} />
-        </label>
+        {ROLES.map((role) => {
+          const current = people[role];
+          // Someone assigned who is no longer in the staff list still shows, so saving never drops them silently.
+          const listed = staff?.some((s) => s.email === current) ?? false;
+          return (
+            <label key={role} className={LABEL} htmlFor={`${id}-${role}`}>
+              {TEAM_ROLE_LABEL[role]}
+              <select
+                id={`${id}-${role}`}
+                className={INPUT}
+                value={current ?? ""}
+                disabled={!staff}
+                onChange={(e) => setPeople((p) => ({ ...p, [role]: e.target.value || null }))}
+              >
+                <option value="">Not assigned</option>
+                {current && !listed ? <option value={current}>{current}</option> : null}
+                {(staff ?? []).map((s) => (
+                  <option key={s.email} value={s.email}>
+                    {s.email}
+                  </option>
+                ))}
+              </select>
+            </label>
+          );
+        })}
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <button type="submit" className={PRIMARY}>
@@ -116,7 +158,13 @@ export function PlanDetails({
               : accounts === null
                 ? "The account list couldn't be loaded, so the account link can't be changed right now. "
                 : ""}
-            Only the owner or an admin can hand a plan to someone else.
+            {staff === undefined
+              ? "Loading the people list… "
+              : staff === null
+                ? "The people list couldn't be loaded, so the team can't be changed right now. "
+                : ""}
+            The Account Executive, the Solution Engineer and admins are the people who can change this plan, so taking
+            yourself off it ends your own access.
           </span>
         )}
       </div>

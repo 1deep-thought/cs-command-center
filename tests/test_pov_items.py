@@ -42,9 +42,13 @@ class FakeItems:
         self.ops: set = set()
         self.writes = 0
         self.dead: set = set()
+        self.members: list[dict] = []  # live pov_member rows
 
     def get_pov(self, pov_id):
         return self.pov if pov_id == "p1" else None
+
+    def team(self, pov_id):
+        return {"owner_email": self.pov.owner_email, "members": list(self.members)} if pov_id == "p1" else None
 
     def op_applied(self, pov_id, op_id, item_kind=None, item_id=None):
         if item_kind is None:

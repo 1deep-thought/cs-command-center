@@ -1,4 +1,5 @@
-"""PoV endpoints for Delphina staff. Every route here sits behind require_delphina."""
+"""PoV endpoints for Delphina staff. Every route here sits behind require_delphina, and every
+route that changes a PoV also behind the editor guard (admin, or the assigned AE or SE)."""
 
 from __future__ import annotations
 
@@ -12,9 +13,11 @@ from fastapi.responses import JSONResponse
 
 from api._lib.auth import require_delphina
 from api._lib.auth_core import Principal
+from api._lib.pov_access import editor_of
 from api._lib.pov_bigquery import CREDENTIALS_ENV
-from api._lib.pov_models import PovConflict, PovCreate, PovListItem, PovOwnerView, PovPatch
+from api._lib.pov_models import PovConflict, PovCreate, PovListItem, PovOwnerView, PovPatch, StaffMember, Team, TeamAssign
 from api._lib.pov_service import PovRepo, create_pov, get_pov, list_povs, patch_pov
+from api._lib.pov_team import assign
 
 log = logging.getLogger(__name__)
 
@@ -34,6 +37,8 @@ def get_repo() -> PovRepo:
 
 
 Repo = Annotated[PovRepo, Depends(get_repo)]
+# Changing a plan: an admin, or its assigned Account Executive or Solution Engineer.
+Editor = Annotated[Principal, Depends(editor_of(get_repo))]
 
 
 def get_staff_check() -> Callable[[str], bool]:
@@ -60,6 +65,13 @@ def list_all(repo: Repo) -> list[PovListItem]:
     return list_povs(repo)
 
 
+# Declared before "/{pov_id}" so the fixed path wins. PoV ids are UUIDs or "seed-…", never "staff".
+@router.get("/staff", response_model=list[StaffMember])
+def list_staff(repo: Repo):
+    """Delphina people who can sign in: the choices for Account Executive and Solution Engineer."""
+    return repo.staff()  # type: ignore[attr-defined]
+
+
 @router.get("/{pov_id}", response_model=PovOwnerView)
 def read(pov_id: PovId, repo: Repo) -> PovOwnerView:
     pov = get_pov(repo, pov_id)
@@ -73,7 +85,7 @@ def read(pov_id: PovId, repo: Repo) -> PovOwnerView:
     response_model=PovOwnerView,
     responses={409: {"model": PovConflict}},
 )
-def update(pov_id: PovId, body: PovPatch, staff: Staff, repo: Repo, is_staff: StaffCheck):
+def update(pov_id: PovId, body: PovPatch, staff: Editor, repo: Repo, is_staff: StaffCheck):
     result = patch_pov(repo, pov_id, body, staff.email, is_admin=staff.is_admin, is_staff=is_staff)
     if result.kind == "not_found":
         raise HTTPException(status_code=404, detail="pov_not_found")
@@ -92,3 +104,17 @@ def update(pov_id: PovId, body: PovPatch, staff: Staff, repo: Repo, is_staff: St
         )
         return JSONResponse(status_code=409, content=conflict.model_dump(mode="json"))
     return result.pov
+
+
+@router.post("/{pov_id}/team", response_model=Team)
+def assign_team(pov_id: PovId, body: TeamAssign, staff: Editor, repo: Repo, is_staff: StaffCheck):
+    """Set (or clear) the plan's Account Executive, Solution Engineer, or both at once. Each
+    person must be Delphina staff. Allowed at any status; it never voids the Sponsor's agreement."""
+    result = assign(repo, pov_id, body, staff.email, is_admin=staff.is_admin, is_staff=is_staff)  # type: ignore[arg-type]
+    if result.kind == "not_found":
+        raise HTTPException(status_code=404, detail="pov_not_found")
+    if result.kind == "forbidden":
+        raise HTTPException(status_code=403, detail=result.code)
+    if result.kind == "invalid":
+        raise HTTPException(status_code=422, detail=result.code)
+    return result.team

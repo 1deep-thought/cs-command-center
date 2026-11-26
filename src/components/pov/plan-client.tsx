@@ -33,10 +33,14 @@ export function PlanClient({
   }, [accountsPromise]);
   const { plan, pending, syncing, notice, dismiss, editor, resync, authNeeded, needAuth, signedIn } = usePlanStore(initial);
   const { pov, pain_points, stakeholders, criteria, milestones, links, readiness } = plan;
-  const edit = pov.status === "draft" || pov.status === "collaborating" ? editor : null;
+  const team = plan.team ?? { ae: null, se: null };
+  // Changing a plan is for its Account Executive, its Solution Engineer and admins. Everyone
+  // else at Delphina reads it. (The server enforces this; here it only decides what to offer.)
+  const canEdit = readiness.is_owner;
+  const edit = canEdit && (pov.status === "draft" || pov.status === "collaborating") ? editor : null;
   // After lock the plan itself is fixed; what is still entered is each criterion's result and
   // which milestones are done. Once decided, nothing.
-  const results = pov.status === "locked" ? editor : null;
+  const results = canEdit && pov.status === "locked" ? editor : null;
   const showResults = pov.status === "locked" || pov.status === "decided";
 
   // Each section shows what the lock checks still want from it (editable plans only).
@@ -59,6 +63,8 @@ export function PlanClient({
         saving={pending}
         accounts={accounts}
         criteria={criteria}
+        team={team}
+        onTeam={editor.setTeam}
         onChanged={resync}
         onDetails={editor.patchPov}
         onAuthNeeded={needAuth}
@@ -105,8 +111,8 @@ export function PlanClient({
       </div>
       <div className="flex h-4 items-center justify-between gap-3">
         <p className={`min-w-0 truncate text-[11px] leading-4 ${MUTED}`}>
-          Owner {pov.owner_email}
-          {edit || results ? " · changes save on Enter or when you leave a field; Esc undoes what you typed" : ""}
+          {canEdit ? "" : "View only: you're not on this plan's team. Its Account Executive, Solution Engineer or an admin can make changes"}
+          {edit || results ? "Changes save on Enter or when you leave a field; Esc undoes what you typed" : ""}
         </p>
         <SignOutButton variant="link" />
       </div>

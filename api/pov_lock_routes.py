@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from api._lib.auth import require_delphina
 from api._lib.auth_core import Principal
+from api._lib.pov_access import editor_of
 from api._lib.pov_bigquery import CREDENTIALS_ENV
 from api._lib.pov_items import PlanView
 from api._lib.pov_lock_service import (
@@ -50,11 +51,13 @@ def get_lock_repo() -> LockRepo:
 
 
 Repo = Annotated[LockRepo, Depends(get_lock_repo)]
+# Changing a plan: an admin, or its assigned Account Executive or Solution Engineer.
+Editor = Annotated[Principal, Depends(editor_of(get_lock_repo))]
 
 
 @router.get("/{pov_id}/readiness", response_model=Readiness)
 def read_readiness(pov_id: PovId, staff: Staff, repo: Repo) -> Readiness:
-    state = get_readiness(repo, pov_id, staff.email)
+    state = get_readiness(repo, pov_id, staff.email, staff.is_admin)
     if state is None:
         raise HTTPException(status_code=404, detail="pov_not_found")
     return state
@@ -62,7 +65,7 @@ def read_readiness(pov_id: PovId, staff: Staff, repo: Repo) -> Readiness:
 
 @router.get("/{pov_id}/plan", response_model=PlanView)
 def read_plan(pov_id: PovId, staff: Staff, repo: Repo):
-    plan = get_plan(repo, pov_id, staff.email)
+    plan = get_plan(repo, pov_id, staff.email, staff.is_admin)
     if plan is None:
         raise HTTPException(status_code=404, detail="pov_not_found")
     return plan
@@ -73,7 +76,7 @@ def _refusal(result: TransitionResult):
     if result.kind == "not_found":
         raise HTTPException(status_code=404, detail="pov_not_found")
     if result.kind == "forbidden":
-        raise HTTPException(status_code=403, detail="not_owner")
+        raise HTTPException(status_code=403, detail="not_assigned")
     if result.kind == "invalid":
         raise HTTPException(status_code=422, detail=result.code)
     if result.kind == "not_ready":
@@ -93,8 +96,8 @@ def _refusal(result: TransitionResult):
     response_model=PovOwnerView,
     responses={409: {"model": TransitionConflict}, 422: {"model": NotReady}},
 )
-def move(pov_id: PovId, body: TransitionIn, staff: Staff, repo: Repo):
-    result = transition(repo, pov_id, body, staff.email)
+def move(pov_id: PovId, body: TransitionIn, staff: Editor, repo: Repo):
+    result = transition(repo, pov_id, body, staff.email, may_act=True, is_admin=staff.is_admin)
     return _refusal(result) or result.pov
 
 
@@ -103,8 +106,8 @@ def move(pov_id: PovId, body: TransitionIn, staff: Staff, repo: Repo):
     response_model=Readiness,
     responses={409: {"model": TransitionConflict}, 422: {"model": NotReady}},
 )
-def record_agreement(pov_id: PovId, body: SponsorAgreementIn, staff: Staff, repo: Repo):
+def record_agreement(pov_id: PovId, body: SponsorAgreementIn, staff: Editor, repo: Repo):
     """Stand-in: the owner records the Sponsor's agreement. Needs status 'collaborating' and the other
     five checks passing. Returns readiness, which is 6 of 6 until the plan is edited again."""
-    result = record_sponsor_agreement(repo, pov_id, body.op_id, staff.email)
+    result = record_sponsor_agreement(repo, pov_id, body.op_id, staff.email, may_act=True, is_admin=staff.is_admin)
     return _refusal(result) or result.readiness

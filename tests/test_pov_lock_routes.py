@@ -53,7 +53,7 @@ def test_a_plan_that_is_not_ready_is_422_with_the_checks():
 
 
 def test_error_statuses():
-    assert lock(client_for(FakeLock(), email="colleague@x")).json() == {"detail": "not_owner"}
+    assert lock(client_for(FakeLock(), email="colleague@x")).json() == {"detail": "not_assigned"}
     assert lock(client_for(FakeLock(), email="colleague@x")).status_code == 403
     r = lock(client_for(FakeLock(status="draft")))
     assert (r.status_code, r.json()["code"], r.json()["current"]["status"]) == (409, "invalid_transition", "draft")

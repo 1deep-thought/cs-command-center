@@ -75,9 +75,31 @@ export interface PovListItem {
   decision_date: string | null;
   /** The customer account this PoV belongs to or turned into, when known. */
   account_id: string | null;
+  /** The assigned Account Executive and Solution Engineer, when set. */
+  ae_email: string | null;
+  se_email: string | null;
   /** Delphina's estimated investment in this PoV, in USD cents. Null until the plan has
    * kickoff and decision dates. */
   invest_minor: number | null;
+}
+
+/** Who at Delphina runs a PoV. They (and admins) are the only people who can change it. */
+export interface Team {
+  ae: string | null;
+  se: string | null;
+}
+export type TeamRole = keyof Team;
+/** POST /{id}/team. Set one role or both in ONE request (the first change can end the caller's
+ * right to make a second). null clears a role; a role left out is untouched.
+ * 403 "not_assigned", 422 "not_staff". */
+export interface TeamAssign {
+  ae?: string | null;
+  se?: string | null;
+  op_id: string;
+}
+/** GET /staff: Delphina people who can sign in. */
+export interface StaffMember {
+  email: string;
 }
 
 /** Delphina's planned team time on a PoV, as money: weeks from kickoff to decision x standard
@@ -143,6 +165,8 @@ export interface Readiness {
   total: number;
   checks: ReadinessCheck[];
   /** Only the owner gets the buttons that move the plan. */
+  /** True when the viewer may change this plan: an admin, or its assigned Account Executive or
+   * Solution Engineer (the name predates assignments). */
   is_owner: boolean;
   /** Empty unless the caller owns the plan. "locked" appears only when every check passes. */
   allowed_transitions: TransitionTarget[];

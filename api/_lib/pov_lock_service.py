@@ -20,14 +20,17 @@ from .pov_rules import (
     TRANSITIONS,
     allowed_transitions,
     investment,
+    may_edit,
     readiness,
     suggested_decision,
+    team_of,
     weighted_score,
 )
 
 APPLIED, MISSING, STALE = 1, 0, 2
 PARTS = ("pain_points", "stakeholders", "criteria", "links", "milestones")
 AGREED = "sponsor_agreed_seq"
+MEMBERS = "members"  # live pov_member rows: the assigned Account Executive and Solution Engineer
 AGREED_FIELD = "sponsor_agreed"  # change-log `field` of the row that records the Sponsor's agreement
 
 
@@ -71,16 +74,25 @@ def is_owner(pov: PovOwnerView, actor: str) -> bool:
     return pov.owner_email.strip().lower() == actor.strip().lower()
 
 
+def _members(parts: dict[str, object]) -> list[dict[str, object]]:
+    rows = parts.get(MEMBERS)
+    return list(rows) if isinstance(rows, list) else []
+
+
+def _may_act(pov: PovOwnerView, parts: dict[str, object], actor: str, is_admin: bool) -> bool:
+    return may_edit(actor=actor, is_admin=is_admin, owner_email=pov.owner_email, members=_members(parts))
+
+
 def _rows(parts: dict[str, object]) -> dict[str, list[dict[str, object]]]:
     return {part: list(parts.get(part) or []) for part in PARTS}  # type: ignore[call-overload]
 
 
-def _readiness(pov: PovOwnerView, parts: dict[str, object], actor: str) -> Readiness:
+def _readiness(pov: PovOwnerView, parts: dict[str, object], actor: str, is_admin: bool = False) -> Readiness:
     agreed = parts.get(AGREED)
     checks = readiness(seq=pov.seq, sponsor_agreed_seq=agreed if isinstance(agreed, int) else None, **_rows(parts))
     passed = sum(1 for c in checks if c["ok"])
     ready = passed == len(checks)
-    owner = is_owner(pov, actor)
+    owner = _may_act(pov, parts, actor, is_admin)  # "owner" = may act on the plan
     return Readiness(
         pov_id=pov.pov_id,
         status=pov.status,
@@ -94,15 +106,15 @@ def _readiness(pov: PovOwnerView, parts: dict[str, object], actor: str) -> Readi
     )
 
 
-def get_readiness(repo: LockRepo, pov_id: str, actor: str) -> Readiness | None:
+def get_readiness(repo: LockRepo, pov_id: str, actor: str, is_admin: bool = False) -> Readiness | None:
     """None = no such PoV."""
     pov = repo.get_pov(pov_id)
     if pov is None:
         return None
-    return _readiness(pov, repo.plan_parts(pov_id), actor)
+    return _readiness(pov, repo.plan_parts(pov_id), actor, is_admin)
 
 
-def get_plan(repo: LockRepo, pov_id: str, actor: str) -> dict[str, object] | None:
+def get_plan(repo: LockRepo, pov_id: str, actor: str, is_admin: bool = False) -> dict[str, object] | None:
     """The whole plan plus its readiness, from one PoV read and one parts read. None = no such PoV."""
     pov = repo.get_pov(pov_id)
     if pov is None:
@@ -111,7 +123,13 @@ def get_plan(repo: LockRepo, pov_id: str, actor: str) -> dict[str, object] | Non
     rows = _rows(parts)
     due = {m.get("kind"): m.get("due_date") for m in rows["milestones"]}
     estimate = investment(due.get("kickoff"), due.get("decision"), pov.start_date, pov.end_date)  # type: ignore[arg-type]
-    return {"pov": pov, **rows, "readiness": _readiness(pov, parts, actor), "investment": estimate}
+    return {
+        "pov": pov,
+        **rows,
+        "readiness": _readiness(pov, parts, actor, is_admin),
+        "investment": estimate,
+        "team": team_of(_members(parts)),
+    }
 
 
 def _dumps(value: object) -> str:
@@ -119,11 +137,16 @@ def _dumps(value: object) -> str:
     return json.dumps(value, default=lambda v: v.isoformat() if isinstance(v, date) else str(v), sort_keys=True)
 
 
-def transition(repo: LockRepo, pov_id: str, body: TransitionIn, actor: str) -> TransitionResult:
+def transition(
+    repo: LockRepo, pov_id: str, body: TransitionIn, actor: str, *, may_act: bool | None = None, is_admin: bool = False
+) -> TransitionResult:
+    """`may_act`: the route's decision that this person may change the plan (admin, or its assigned
+    Account Executive or Solution Engineer). Left as None, the plan's owner may (the rule before
+    assignments existed; kept for callers that have no team to consult)."""
     pov = repo.get_pov(pov_id)
     if pov is None:
         return TransitionResult("not_found")
-    if not is_owner(pov, actor):
+    if not (is_owner(pov, actor) if may_act is None else may_act):
         return TransitionResult("forbidden", pov)
     target = body.to
     if pov.status == target:
@@ -143,7 +166,7 @@ def transition(repo: LockRepo, pov_id: str, body: TransitionIn, actor: str) -> T
         if go <= no_go:
             return TransitionResult("invalid", pov, code="invalid_thresholds")
         parts = repo.plan_parts(pov_id)
-        state = _readiness(pov, parts, actor)
+        state = _readiness(pov, parts, actor, is_admin)
         if not state.ready:
             return TransitionResult("not_ready", pov, readiness=state)
         rows = _rows(parts)
@@ -192,19 +215,21 @@ def transition(repo: LockRepo, pov_id: str, body: TransitionIn, actor: str) -> T
     return TransitionResult("conflict", latest)  # edited while locking: re-read readiness and try again
 
 
-def record_sponsor_agreement(repo: LockRepo, pov_id: str, op_id: UUID, actor: str) -> TransitionResult:
+def record_sponsor_agreement(
+    repo: LockRepo, pov_id: str, op_id: UUID, actor: str, *, may_act: bool | None = None, is_admin: bool = False
+) -> TransitionResult:
     """STAND-IN until the Sponsor can agree through their own link: the owner records that the Sponsor
     agreed. The log row says who recorded it and how, so these can be told apart from real agreements
     later. The plan must already pass the other five checks; any edit afterwards voids the agreement."""
     pov = repo.get_pov(pov_id)
     if pov is None:
         return TransitionResult("not_found")
-    if not is_owner(pov, actor):
+    if not (is_owner(pov, actor) if may_act is None else may_act):
         return TransitionResult("forbidden", pov)
     if pov.status != "collaborating":
         return TransitionResult("invalid_transition", pov)
     parts = repo.plan_parts(pov_id)
-    state = _readiness(pov, parts, actor)
+    state = _readiness(pov, parts, actor, is_admin)
     if state.ready:
         return TransitionResult("applied", pov, readiness=state)  # already agreed to this exact plan
     if any(not c.ok for c in state.checks if c.key != "sponsor_agreed"):
@@ -223,7 +248,7 @@ def record_sponsor_agreement(repo: LockRepo, pov_id: str, op_id: UUID, actor: st
     latest = repo.get_pov(pov_id)
     if code == MISSING or latest is None:
         return TransitionResult("not_found")
-    state = _readiness(latest, repo.plan_parts(pov_id), actor)
+    state = _readiness(latest, repo.plan_parts(pov_id), actor, is_admin)
     if code == APPLIED or state.ready:
         return TransitionResult("applied", latest, readiness=state)
     if latest.status != "collaborating":
